@@ -1,0 +1,507 @@
+# Build the RMX1805 (ArcticFox) kernel with ReSukiSU integrated,
+# then pack it as a flashable AnyKernel3 zip.
+#
+# FULLY SELF-CONTAINED: this workflow applies the ReSukiSU manual-hook
+# patch itself (see "Integrate ReSukiSU hooks" step), fetches the ReSukiSU
+# driver via the official setup.sh, builds, and packs AnyKernel3.
+# Just copy this file to .github/workflows/build-kernel.yml and push.
+
+name: Build RMX1805 Kernel (ReSukiSU)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ArcticFox
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: Integrate ReSukiSU hooks
+        run: |
+          cat > /tmp/resukisu-hooks.patch <<'PATCHEOF'
+          diff --git a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
+          index a3dd48bb..d13bba72 100644
+          --- a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
+          +++ b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
+          @@ -750,6 +750,8 @@ CONFIG_SCHED_DEBUG=y
+           CONFIG_EXT4_ASYNC_DISCARD_SUPPORT=y
+           #endif
+           
+          -# KernelSU
+          +# KernelSU (ReSukiSU, manual hook mode for 4.9 non-GKI)
+           CONFIG_KSU=y
+          +# CONFIG_KSU_TRACEPOINT_HOOK is not set
+          +CONFIG_KSU_MANUAL_HOOK=y
+           CONFIG_OVERLAY_FS=y
+          diff --git a/drivers/input/input.c b/drivers/input/input.c
+          index 6665c2a8..1e04d2e4 100644
+          --- a/drivers/input/input.c
+          +++ b/drivers/input/input.c
+          @@ -377,20 +377,11 @@ static int input_get_disposition(struct input_dev *dev,
+           	return disposition;
+           }
+           
+          -#ifdef CONFIG_KSU
+          -extern bool ksu_input_hook __read_mostly;
+          -extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
+          -#endif
+          -
+           static void input_handle_event(struct input_dev *dev,
+           			       unsigned int type, unsigned int code, int value)
+           {
+           	int disposition = input_get_disposition(dev, type, code, &value);
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_input_hook))
+          -		ksu_handle_input_handle_event(&type, &code, &value);
+          -	#endif
+           	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
+           		add_input_randomness(type, code, value);
+           
+          diff --git a/fs/exec.c b/fs/exec.c
+          index 12fbb811..dbeafb6b 100644
+          --- a/fs/exec.c
+          +++ b/fs/exec.c
+          @@ -1815,12 +1815,13 @@ static int oppo_check_execveat_perm(struct file* filp)
+            * sys_execve() executes a new program.
+            */
+           
+          -#ifdef CONFIG_KSU
+          -extern bool ksu_execveat_hook __read_mostly;
+          -extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+          -			void *envp, int *flags);
+          -extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+          -				 void *argv, void *envp, int *flags);
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +__attribute__((hot))
+          +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+          +				void *argv, void *envp, int *flags);
+          +__attribute__((hot))
+          +extern int ksu_handle_post_execveat(int *fd, struct filename **filename_ptr,
+          +				void *argv, void *envp, int *flags, int *retval);
+           #endif
+           
+           static int do_execveat_common(int fd, struct filename *filename,
+          @@ -1834,12 +1835,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           	struct files_struct *displaced;
+           	int retval;
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_execveat_hook))
+          -		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+          -	else
+          -		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+          -	#endif
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+          +#endif
+           
+           	if (IS_ERR(filename))
+           		return PTR_ERR(filename);
+          @@ -1982,6 +1980,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           	putname(filename);
+           	if (displaced)
+           		put_files_struct(displaced);
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+          +#endif
+           	return retval;
+           
+           out:
+          @@ -2003,6 +2004,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           		reset_files_struct(displaced);
+           out_ret:
+           	putname(filename);
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+          +#endif
+           	return retval;
+           }
+           
+          diff --git a/fs/open.c b/fs/open.c
+          index 9a87e001..7eda1c1a 100644
+          --- a/fs/open.c
+          +++ b/fs/open.c
+          @@ -355,7 +355,7 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+           	return error;
+           }
+           
+          -#ifdef CONFIG_KSU
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+           extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
+           			 int *flags);
+           #endif
+          @@ -375,7 +375,7 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+           	int res;
+           	unsigned int lookup_flags = LOOKUP_FOLLOW;
+           
+          -	#ifdef CONFIG_KSU
+          +	#ifdef CONFIG_KSU_MANUAL_HOOK
+           	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+           	#endif
+           
+          diff --git a/fs/read_write.c b/fs/read_write.c
+          index 93a33c07..90123126 100644
+          --- a/fs/read_write.c
+          +++ b/fs/read_write.c
+          @@ -456,21 +456,10 @@ ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
+           }
+           EXPORT_SYMBOL(__vfs_read);
+           
+          -#ifdef CONFIG_KSU
+          -extern bool ksu_vfs_read_hook __read_mostly;
+          -extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
+          -			size_t *count_ptr, loff_t **pos);
+          -#endif
+          -
+           ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+           {
+           	ssize_t ret;
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_vfs_read_hook))
+          -		ksu_handle_vfs_read(&file, &buf, &count, &pos);
+          -	#endif
+          -
+           	if (!(file->f_mode & FMODE_READ))
+           		return -EBADF;
+           	if (!(file->f_mode & FMODE_CAN_READ))
+          diff --git a/fs/stat.c b/fs/stat.c
+          index ce24d2a1..2d9a81dd 100644
+          --- a/fs/stat.c
+          +++ b/fs/stat.c
+          @@ -87,10 +87,6 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
+           }
+           EXPORT_SYMBOL(vfs_fstat);
+           
+          -#ifdef CONFIG_KSU
+          -extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
+          -#endif
+          -
+           int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
+           		int flag)
+           {
+          @@ -98,10 +94,6 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
+           	int error = -EINVAL;
+           	unsigned int lookup_flags = 0;
+           
+          -	#ifdef CONFIG_KSU
+          -	ksu_handle_stat(&dfd, &filename, &flag);
+          -	#endif
+          -
+           	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+           		      AT_EMPTY_PATH)) != 0)
+           		goto out;
+          @@ -295,6 +287,17 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+           	return cp_new_stat(&stat, statbuf);
+           }
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +__attribute__((hot))
+          +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
+          +				int *flags);
+          +
+          +extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
+          +#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+          +extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr); // optional
+          +#endif
+          +#endif
+          +
+           #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
+           SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+           		struct stat __user *, statbuf, int, flag)
+          @@ -302,6 +305,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+           	struct kstat stat;
+           	int error;
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_stat(&dfd, &filename, &flag);
+          +#endif
+           	error = vfs_fstatat(dfd, filename, &stat, flag);
+           	if (error)
+           		return error;
+          @@ -317,6 +323,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+           	if (!error)
+           		error = cp_new_stat(&stat, statbuf);
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_newfstat_ret(&fd, &statbuf);
+          +#endif
+           	return error;
+           }
+           
+          @@ -435,6 +444,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
+           	if (!error)
+           		error = cp_new_stat64(&stat, statbuf);
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK // for 32-bit
+          +	ksu_handle_fstat64_ret(&fd, &statbuf);
+          +#endif
+           	return error;
+           }
+           
+          @@ -444,6 +456,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
+           	struct kstat stat;
+           	int error;
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK // 32-bit su
+          +	ksu_handle_stat(&dfd, &filename, &flag);
+          +#endif
+           	error = vfs_fstatat(dfd, filename, &stat, flag);
+           	if (error)
+           		return error;
+          diff --git a/kernel/reboot.c b/kernel/reboot.c
+          index 2946ed1d..ac2bcff5 100644
+          --- a/kernel/reboot.c
+          +++ b/kernel/reboot.c
+          @@ -277,6 +277,11 @@ static DEFINE_MUTEX(reboot_mutex);
+            *
+            * reboot doesn't sync: do that yourself before calling this.
+            */
+          +
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
+          +#endif
+          +
+           SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           		void __user *, arg)
+           {
+          @@ -284,6 +289,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           	char buffer[256];
+           	int ret = 0;
+           
+          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+          +#endif
+           	/* We only trust the superuser with rebooting the system. */
+           	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+           		return -EPERM;
+          diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+          index 20c27ff8..167bda31 100644
+          --- a/security/selinux/hooks.c
+          +++ b/security/selinux/hooks.c
+          @@ -1096,7 +1096,6 @@ static int selinux_parse_opts_str(char *options,
+           	if (!opts->mnt_opts_flags)
+           		goto out_err;
+           
+          -
+           	if (fscontext) {
+           		opts->mnt_opts[num_mnt_opts] = fscontext;
+           		opts->mnt_opts_flags[num_mnt_opts++] = FSCONTEXT_MNT;
+          @@ -2283,33 +2282,12 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
+           	int nosuid = !mnt_may_suid(bprm->file->f_path.mnt);
+           	int rc;
+           
+          -	#ifdef CONFIG_KSU
+          -    static u32 ksu_sid;
+          -    char *secdata;
+          -    int error;
+          -    u32 seclen;
+          -	#endif
+          -
+           	if (!nnp && !nosuid)
+           		return 0; /* neither NNP nor nosuid */
+           
+           	if (new_tsec->sid == old_tsec->sid)
+           		return 0; /* No change in credentials */
+           
+          -	#ifdef CONFIG_KSU
+          -	if (!ksu_sid) {
+          -        security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksu_sid);
+          -	}
+          -	error = security_secid_to_secctx(old_tsec->sid, &secdata, &seclen);
+          -	if (!error) {
+          -        rc = strcmp("u:r:init:s0",secdata);
+          -        security_release_secctx(secdata, seclen);
+          -        if (rc == 0 && new_tsec->sid == ksu_sid) {
+          -			return 0;
+          -        }
+          -    }
+          -	#endif
+          -
+           	/*
+           	 * The only transitions we permit under NNP or nosuid
+           	 * are transitions to bounded SIDs, i.e. SIDs that are
+          diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+          index 5c731b5f..1548fcee 100644
+          --- a/security/selinux/selinuxfs.c
+          +++ b/security/selinux/selinuxfs.c
+          @@ -60,7 +60,7 @@ static int __init checkreqprot_setup(char *str)
+           }
+           __setup("checkreqprot=", checkreqprot_setup);
+           
+          -static DEFINE_MUTEX(sel_mutex);
+          +DEFINE_MUTEX(sel_mutex);
+           
+           /* global data for booleans */
+           static struct dentry *bool_dir;
+          @@ -268,7 +268,7 @@ static int sel_mmap_handle_status(struct file *filp,
+           			       size, vma->vm_page_prot);
+           }
+           
+          -static const struct file_operations sel_handle_status_ops = {
+          +const struct file_operations sel_handle_status_ops = {
+           	.open		= sel_open_handle_status,
+           	.read		= sel_read_handle_status,
+           	.mmap		= sel_mmap_handle_status,
+          @@ -730,7 +730,7 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size);
+           static ssize_t sel_write_user(struct file *file, char *buf, size_t size);
+           static ssize_t sel_write_member(struct file *file, char *buf, size_t size);
+           
+          -static ssize_t (*write_op[])(struct file *, char *, size_t) = {
+          +ssize_t (*write_op[])(struct file *, char *, size_t) = {
+           	[SEL_ACCESS] = sel_write_access,
+           	[SEL_CREATE] = sel_write_create,
+           	[SEL_RELABEL] = sel_write_relabel,
+          diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
+          index 9c657f0e..8fea35c5 100644
+          --- a/security/selinux/ss/services.c
+          +++ b/security/selinux/ss/services.c
+          @@ -74,7 +74,7 @@ int selinux_policycap_netpeer;
+           int selinux_policycap_openperm;
+           int selinux_policycap_alwaysnetwork;
+           
+          -static DEFINE_RWLOCK(policy_rwlock);
+          +DEFINE_RWLOCK(policy_rwlock);
+           
+           static struct sidtab sidtab;
+           struct policydb policydb;
+          diff --git a/security/selinux/ss/status.c b/security/selinux/ss/status.c
+          index feb23857..5cdd7c42 100644
+          --- a/security/selinux/ss/status.c
+          +++ b/security/selinux/ss/status.c
+          @@ -35,8 +35,8 @@
+            * In most cases, application shall confirm the kernel status is not
+            * changed without any system call invocations.
+            */
+          -static struct page *selinux_status_page;
+          -static DEFINE_MUTEX(selinux_status_lock);
+          +struct page *selinux_status_page;
+          +DEFINE_MUTEX(selinux_status_lock);
+           
+           /*
+            * selinux_kernel_status_page
+          
+          PATCHEOF
+          git apply --check /tmp/resukisu-hooks.patch
+          git apply /tmp/resukisu-hooks.patch
+          echo "=== applied changes ==="
+          git diff --stat | tail -12
+
+      - name: Fetch ReSukiSU driver (official setup.sh)
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s --
+          ls -la drivers/kernelsu
+
+      - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev ccache zip
+          mkdir -p toolchain
+          cd toolchain
+          curl -sSL -o gcc.tar.xz \
+            https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/9.4.0/x86_64-gcc-9.4.0-nolibc-aarch64-linux.tar.xz
+          tar -xf gcc.tar.xz
+          ./gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc --version
+
+      - name: ccache setup
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: rmx1805-kernel-${{ github.ref_name }}
+          max-size: 2G
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-
+          export PATH="/usr/lib/ccache:$PATH"
+          make RMX1805_ArcticFox-KSU_defconfig
+          make -j$(nproc) CC="ccache $CROSS_COMPILEgcc" \
+            KCFLAGS="-Idrivers/gpu/msm \
+                     -Idrivers/bluetooth \
+                     -Idrivers/input/touchscreen/ili9881_18663 \
+                     -Idrivers/media/platform/msm/camera_v2/isp \
+                     -Idrivers/media/platform/msm/camera_v2/common \
+                     -Idrivers/media/platform/msm/camera_v2/sensor/io \
+                     -Idrivers/qihoo \
+                     -Idrivers/usb/gadget \
+                     -Idrivers/platform/msm/ipa/ipa_v2 \
+                     -Idrivers/platform/msm/ipa/ipa_clients"
+          ls -lh arch/arm64/boot/Image arch/arm64/boot/Image.gz-dtb
+
+      - name: Pack AnyKernel3 zip
+        run: |
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git anykernel3
+          cd anykernel3
+          rm -rf .git .github
+          cp ../arch/arm64/boot/Image.gz-dtb .
+          cat > anykernel.sh <<'AK3EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+          # Adapted for Realme 2 / Realme C1 (RMX1805) - ArcticFox ReSukiSU kernel
+
+          ### AnyKernel setup
+          # global properties
+          properties() { '
+          kernel.string=ArcticFox ReSukiSU Kernel for Realme 2 (RMX1805)
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=RMX1805
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; } # end properties
+
+
+          ### AnyKernel install
+          ## boot files attributes
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          } # end attributes
+
+          # boot shell variables
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh;
+
+          # boot install
+          dump_boot;
+
+          # No ramdisk modifications - pure kernel swap.
+          # The Image.gz-dtb in the zip root is auto-detected and replaces the boot image kernel.
+
+          write_boot;
+          ## end boot install
+          AK3EOF
+          zip -r9 ../RMX1805-ArcticFox-ReSukiSU-Kernel.zip . -x "*.git*"
+          cd ..
+          ls -lh RMX1805-ArcticFox-ReSukiSU-Kernel.zip
+          unzip -l RMX1805-ArcticFox-ReSukiSU-Kernel.zip | grep -E "Image.gz-dtb|anykernel.sh"
+
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: RMX1805-ArcticFox-ReSukiSU-Kernel-${{ github.sha }}
+          path: RMX1805-ArcticFox-ReSukiSU-Kernel.zip
+          retention-days: 14
