@@ -423,13 +423,21 @@ jobs:
         run: |
           export ARCH=arm64
           GCC_DIR=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin
-          # ccache via wrapper script: keeps CC a single word, because kernel
-          # scripts (e.g. stack-protector check) pass $(CC) as a single $1
-          # and "CC=ccache <compiler>" breaks them.
+          # Wrapper scripts for every cross tool. Only gcc goes through
+          # ccache; the rest exec the real binary directly. This keeps CC
+          # a single word, because kernel scripts (e.g. the stack-protector
+          # check) pass $(CC) as a single $1, and "CC=ccache <compiler>"
+          # breaks them. It also satisfies $(CROSS_COMPILE)ld/nm/objdump/...
           mkdir -p $GITHUB_WORKSPACE/ccache-bin
-          printf '#!/bin/sh\nexec ccache "%s/aarch64-linux-gcc" "$@"\n' "$GCC_DIR" \
-            > $GITHUB_WORKSPACE/ccache-bin/aarch64-linux-gcc
-          chmod +x $GITHUB_WORKSPACE/ccache-bin/aarch64-linux-gcc
+          for tool in "$GCC_DIR"/aarch64-linux-*; do
+            name=$(basename "$tool")
+            if [ "$name" = "aarch64-linux-gcc" ]; then
+              printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$tool" > "$GITHUB_WORKSPACE/ccache-bin/$name"
+            else
+              printf '#!/bin/sh\nexec "%s" "$@"\n' "$tool" > "$GITHUB_WORKSPACE/ccache-bin/$name"
+            fi
+            chmod +x "$GITHUB_WORKSPACE/ccache-bin/$name"
+          done
           export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
           make -j$(nproc) \
