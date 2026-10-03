@@ -422,10 +422,17 @@ jobs:
       - name: Build kernel
         run: |
           export ARCH=arm64
-          export CROSS_COMPILE=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-
-          export PATH="/usr/lib/ccache:$PATH"
+          GCC_DIR=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin
+          # ccache via wrapper script: keeps CC a single word, because kernel
+          # scripts (e.g. stack-protector check) pass $(CC) as a single $1
+          # and "CC=ccache <compiler>" breaks them.
+          mkdir -p $GITHUB_WORKSPACE/ccache-bin
+          printf '#!/bin/sh\nexec ccache "%s/aarch64-linux-gcc" "$@"\n' "$GCC_DIR" \
+            > $GITHUB_WORKSPACE/ccache-bin/aarch64-linux-gcc
+          chmod +x $GITHUB_WORKSPACE/ccache-bin/aarch64-linux-gcc
+          export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
-          make -j$(nproc) CC="ccache $CROSS_COMPILEgcc" \
+          make -j$(nproc) \
             KCFLAGS="-Idrivers/gpu/msm \
                      -Idrivers/bluetooth \
                      -Idrivers/input/touchscreen/ili9881_18663 \
