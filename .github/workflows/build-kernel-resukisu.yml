@@ -514,7 +514,7 @@ jobs:
           done
           export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
-          make -j$(nproc) \
+          make -j$(nproc) LOCALVERSION= \
             KCFLAGS="-Idrivers/gpu/msm \
                      -Idrivers/bluetooth \
                      -Idrivers/input/touchscreen/ili9881_18663 \
