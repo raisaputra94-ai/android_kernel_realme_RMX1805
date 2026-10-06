@@ -404,13 +404,14 @@ jobs:
           index a3dd48bb..c9e26861 100644
           --- a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
           +++ b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
-          @@ -67,6 +67,9 @@ CONFIG_PREEMPT=y
+          @@ -67,6 +67,10 @@ CONFIG_PREEMPT=y
            CONFIG_HZ_100=y
            CONFIG_CMA=y
            CONFIG_ZSMALLOC=y
-          +# 2GB low-RAM tuning: swap backend for zram + page merging
+          +# 2GB low-RAM tuning: swap backend for zram (KSM removed 2026-10-06:
+          +# pages_shared=24 on-device = 96KB saved vs 221min ksmd CPU, pure overhead)
           +CONFIG_SWAP=y
-          +CONFIG_KSM=y
+          +# CONFIG_KSM is not set
            CONFIG_PROCESS_RECLAIM=y
            CONFIG_SECCOMP=y
            CONFIG_HARDEN_BRANCH_PREDICTOR=y
