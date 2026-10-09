@@ -1,12 +1,12 @@
-# Build the RMX1805 (ArcticFox) kernel with ReSukiSU integrated,
+# Build the RMX1805 (ArcticFox) kernel with BakaSU integrated,
 # then pack it as a flashable AnyKernel3 zip.
 #
-# FULLY SELF-CONTAINED: this workflow applies the ReSukiSU manual-hook
-# patch itself (see "Integrate ReSukiSU hooks" step), fetches the ReSukiSU
+# FULLY SELF-CONTAINED: this workflow applies the BakaSU manual-hook
+# patch itself (see "Integrate BakaSU hooks" step), fetches the BakaSU
 # driver via the official setup.sh, builds, and packs AnyKernel3.
 # Just copy this file to .github/workflows/build-kernel.yml and push.
 
-name: Build RMX1805 Kernel (ReSukiSU)
+name: Build RMX1805 Kernel (BakaSU)
 
 on:
   workflow_dispatch:
@@ -25,9 +25,9 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Integrate ReSukiSU hooks
+      - name: Integrate BakaSU hooks
         run: |
-          cat > /tmp/resukisu-hooks.patch <<'PATCHEOF'
+          cat > /tmp/BakaSU-hooks.patch <<'PATCHEOF'
           diff --git a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
           index a3dd48bb..d13bba72 100644
           --- a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
@@ -37,7 +37,7 @@ jobs:
            #endif
            
           -# KernelSU
-          +# KernelSU (ReSukiSU, manual hook mode for 4.9 non-GKI)
+          +# KernelSU (BakaSU, manual hook mode for 4.9 non-GKI)
            CONFIG_KSU=y
           +# CONFIG_KSU_TRACEPOINT_HOOK is not set
           +CONFIG_KSU_MANUAL_HOOK=y
@@ -392,8 +392,8 @@ jobs:
             * selinux_kernel_status_page
           
           PATCHEOF
-          git apply --check /tmp/resukisu-hooks.patch
-          git apply /tmp/resukisu-hooks.patch
+          git apply --check /tmp/BakaSU-hooks.patch
+          git apply /tmp/BakaSU-hooks.patch
           echo "=== applied changes ==="
           git diff --stat | tail -12
 
@@ -472,9 +472,9 @@ jobs:
           echo "=== low-RAM tweaks applied ==="
           git diff --stat | tail -5
 
-      - name: Fetch ReSukiSU driver (official setup.sh)
+      - name: Fetch BakaSU driver (official setup.sh)
         run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s --
+          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s --
           ls -la drivers/kernelsu
 
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
@@ -544,7 +544,7 @@ jobs:
           ### AnyKernel setup
           # global properties
           properties() { '
-          kernel.string=ArcticFox ReSukiSU Kernel for RMX1805/RMX1809/RMX1811
+          kernel.string=ArcticFox BakaSU Kernel for RMX1805/RMX1809/RMX1811
           do.devicecheck=1
           do.modules=1
           do.systemless=1
@@ -584,15 +584,15 @@ jobs:
           "$STRIP" --strip-unneeded anykernel3/modules/system/lib/modules/*.ko
           ls anykernel3/modules/system/lib/modules/
           cd anykernel3
-          zip -r9 ../RMX1805-ArcticFox-ReSukiSU-Kernel.zip . -x "*.git*"
+          zip -r9 ../RMX1805-ArcticFox-BakaSU-Kernel.zip . -x "*.git*"
           cd ..
-          ls -lh RMX1805-ArcticFox-ReSukiSU-Kernel.zip
-          unzip -l RMX1805-ArcticFox-ReSukiSU-Kernel.zip | grep -E "Image.gz-dtb|anykernel.sh|wlan.ko"
+          ls -lh RMX1805-ArcticFox-BakaSU-Kernel.zip
+          unzip -l RMX1805-ArcticFox-BakaSU-Kernel.zip | grep -E "Image.gz-dtb|anykernel.sh|wlan.ko"
 
 
       - name: Upload AnyKernel3 zip
         uses: actions/upload-artifact@v4
         with:
-          name: RMX1805-ArcticFox-ReSukiSU-Kernel-${{ github.sha }}
-          path: RMX1805-ArcticFox-ReSukiSU-Kernel.zip
+          name: RMX1805-ArcticFox-BakaSU-Kernel-${{ github.sha }}
+          path: RMX1805-ArcticFox-BakaSU-Kernel.zip
           retention-days: 14
