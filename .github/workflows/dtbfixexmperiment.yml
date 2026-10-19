@@ -1,9 +1,6 @@
 # Build the RMX1805 (ArcticFox) kernel with BakaSU integrated,
 # then pack it as a flashable AnyKernel3 zip.
 #
-# v11: Adds camera DTS fix (sdm450-pmi632 was missing camera sensor include,
-# causing "vfe_fuse not found" and 0 cameras exposed to HAL).
-#
 # FULLY SELF-CONTAINED: this workflow applies the BakaSU manual-hook
 # patch itself (see "Integrate BakaSU hooks" step), fetches the BakaSU
 # driver via the official setup.sh, builds, and packs AnyKernel3.
@@ -179,7 +176,7 @@ jobs:
            		return -EBADF;
            	if (!(file->f_mode & FMODE_CAN_READ))
           diff --git a/fs/stat.c b/fs/stat.c
-          index 87a10c86..2d9a81dd 100644
+          index ce24d2a1..2d9a81dd 100644
           --- a/fs/stat.c
           +++ b/fs/stat.c
           @@ -87,10 +87,6 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
@@ -195,7 +192,7 @@ jobs:
            {
           @@ -98,10 +94,6 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
            	int error = -EINVAL;
-           	int lookup_flags = 0;
+           	unsigned int lookup_flags = 0;
            
           -	#ifdef CONFIG_KSU
           -	ksu_handle_stat(&dfd, &filename, &flag);
@@ -335,10 +332,10 @@ jobs:
            	 * The only transitions we permit under NNP or nosuid
            	 * are transitions to bounded SIDs, i.e. SIDs that are
           diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-          index 5c731b5f..167bda31 100644
+          index 5c731b5f..1548fcee 100644
           --- a/security/selinux/selinuxfs.c
           +++ b/security/selinux/selinuxfs.c
-          @@ -60,7 +60,7 @@ static DEFINE_MUTEX(sel_mutex);
+          @@ -60,7 +60,7 @@ static int __init checkreqprot_setup(char *str)
            }
            __setup("checkreqprot=", checkreqprot_setup);
            
