@@ -1,3 +1,59 @@
+# v17-ramoops-dt (2026-10-26): v16 + the ramoops device-tree fix.
+# The device-tree analysis came from the dev (forwarded 2026-10-26) and was
+# verified claim-by-claim against fs/pstore/ram.c in this tree before
+# integrating it. Two corrections to that analysis are recorded here, so
+# the reasoning in the file stays honest:
+#  - The old project node sizes sum to 0x100000 exactly, NOT 0x120000
+#    (0x80000 console + 0x40000 record + 0x20000 ftrace + 0x20000 pmsg).
+#    It still fails, but for a different reason: the driver computes the
+#    dump area as region - console - ftrace - pmsg = 0, so max_dump_cnt
+#    is 0 and the probe returns -ENOMEM. The record size is the size of
+#    each dump inside that area, not extra space on top of it.
+#  - The base node failure does not block the project node: a failed
+#    probe leaves max_dump_cnt at 0, so the second node still probes
+#    (and also fails, as above). Both nodes failing is why pstore is
+#    empty even though PSTORE_RAM is on.
+# The dev patch's defconfig part is deliberately NOT duplicated here:
+# the v16 toggle already turns PSTORE_CONSOLE/PMSG on when enabled and
+# preserves the disabled choice; running the dev regex after the toggle
+# would assert-fail because those comment lines are already gone.
+# This step is therefore DT-only, placed before the toggle step.
+# New project node: console 0x40000, record 0x20000, pmsg 0x20000,
+# ftrace dropped; dump area = 0x100000 - 0x40000 - 0x20000 = 0xA0000,
+# i.e. 5 dump records, an exact fit for the region.
+# Still unproven: the DTB has not been compiled here, and the
+# 0x92100000 region being free on the bootloader's memory map is an
+# assumption (it sits exactly after wt_share_mem at 0x92000000+0x100000).
+# Test is a build, then flash, then dmesg | grep -i ramoops.
+#
+# v16-pstore-toggle (2026-10-26): base is the GitHub ArcticFox workflow
+# build-kernel-bakasu.yml as fetched 2026-10-26 (600 lines, body identical
+# to the local v15 file except v15's version header, which the GitHub copy
+# does not carry). NO other step changed.
+#
+# NEW: a workflow_dispatch select box for pstore (ramoops).
+#   pstore = enabled  (default): PSTORE + PSTORE_RAM + PSTORE_CONSOLE +
+#                          PSTORE_PMSG are forced on in the defconfig
+#                          before the build, so the built kernel keeps a
+#                          console log across a reboot (last-kmsg) and
+#                          saves panic/oops dumps to RAM.
+#   pstore = disabled: all four are forced off; no pstore code is built.
+# Push-triggered runs have no dispatch input, so they fall back to
+# "enabled" inside the step (see the -z check).
+#
+# WHAT "FIX" MEANS HERE: the defconfig already shipped PSTORE=y and
+# PSTORE_RAM=y, but PSTORE_CONSOLE and PSTORE_PMSG were off, so no
+# running console log was kept. This toggle turns those two on in the
+# enabled case. No device-tree change: the ramoops node is already in
+# the platform DTSI. Pstore covers kernel panic/oops/console only, not
+# userspace HAL crashes (those go to tombstones).
+#
+# The defconfig ships PSTORE_FTRACE/PMSG/CONSOLE as non-standard
+# "#CONFIG_...=n" comments, which scripts/config does not recognise as
+# set/unset lines; the pstore step deletes those three comment lines
+# first, so the toggle is the only CONSOLE/PMSG setting in the file.
+# PSTORE_FTRACE stays off in both modes (overhead, not needed here).
+#
 # Build the RMX1805 (ArcticFox) kernel with BakaSU integrated,
 # then pack it as a flashable AnyKernel3 zip.
 #
@@ -10,6 +66,15 @@ name: Build RMX1805 Kernel (BakaSU)
 
 on:
   workflow_dispatch:
+    inputs:
+      pstore:
+        description: 'Pstore (ramoops) logging'
+        type: choice
+        required: true
+        default: 'enabled'
+        options:
+          - enabled
+          - disabled
   push:
     branches:
       - ArcticFox
@@ -472,6 +537,90 @@ jobs:
           echo "=== low-RAM tweaks applied ==="
           git diff --stat | tail -5
 
+      - name: Fix ramoops DT nodes (disable broken base node, resize project node)
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          base = pathlib.Path("arch/arm64/boot/dts/qcom")
+
+          # Base node: record-size is two cells <0x0 0x00020000>; the
+          # driver reads the first cell (0) via of_property_read_u32, so
+          # record/console/ftrace/pmsg are all 0 and the probe fails with
+          # "The memory size and the record/console size must be non-zero".
+          # Disabling it leaves the project node as the only ramoops node.
+          p = base / "msm8953.dtsi"
+          s = p.read_text()
+          s, n = re.subn(r'(ramoops@0x91400000 \{\s*compatible = "ramoops";)',
+                         r'\1\n\t\t\tstatus = "disabled";', s, count=1)
+          assert n == 1, "msm8953.dtsi ramoops node not found"
+          p.write_text(s)
+
+          # Project node: old sizes left zero bytes for dump records
+          # (region - console - ftrace - pmsg = 0), so the probe failed
+          # with -ENOMEM. New sizes leave a 0xA0000 dump area (5 records).
+          p = base / "sdm450-pmi632.dtsi"
+          s = p.read_text()
+          nl = "\r\n" if "\r\n" in s else "\n"
+          new = nl.join([
+              "\tpstore: ramoops@92100000 {",
+              "\t\tcompatible = \"ramoops\";",
+              "\t\treg = <0 0x92100000 0 0x100000>;",
+              "\t\tecc-size\t= <0x10>;",
+              "\t\tconsole-size\t= <0x40000>;",
+              "\t\trecord-size\t= <0x20000>;",
+              "\t\tpmsg-size\t= <0x20000>;",
+              "\t};",
+          ])
+          s, n = re.subn(r'pstore: ramoops@92100000 \{.*?\};', lambda m: new, s, count=1, flags=re.S)
+          assert n == 1, "sdm450-pmi632.dtsi pstore node not found"
+          # Sanity: dump area (region - console - ftrace - pmsg) must hold
+          # at least one record, or the probe fails exactly as before.
+          assert 0x100000 - 0x40000 - 0 - 0x20000 >= 0x20000, "new node sizes leave no dump area"
+          p.write_text(s)
+          PY
+          git diff --stat | tail -5
+
+      - name: Configure pstore (dispatch choice)
+        run: |
+          PSTORE_CHOICE="${{ inputs.pstore }}"
+          if [ -z "$PSTORE_CHOICE" ]; then PSTORE_CHOICE="enabled"; fi
+          echo "pstore choice: $PSTORE_CHOICE"
+          DEFCONFIG="arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig"
+          sed -i '/^#CONFIG_PSTORE_/d' "$DEFCONFIG"
+          case "$PSTORE_CHOICE" in
+            enabled)
+              ./scripts/config --file "$DEFCONFIG" \
+                --enable CONFIG_PSTORE \
+                --enable CONFIG_PSTORE_RAM \
+                --enable CONFIG_PSTORE_CONSOLE \
+                --enable CONFIG_PSTORE_PMSG
+              ;;
+            disabled)
+              ./scripts/config --file "$DEFCONFIG" \
+                --disable CONFIG_PSTORE \
+                --disable CONFIG_PSTORE_RAM \
+                --disable CONFIG_PSTORE_CONSOLE \
+                --disable CONFIG_PSTORE_PMSG
+              ;;
+            *)
+              echo "ERROR: unknown pstore choice: $PSTORE_CHOICE" >&2
+              exit 1
+              ;;
+          esac
+          echo "=== pstore lines in defconfig ==="
+          grep "PSTORE" "$DEFCONFIG"
+          if [ "$PSTORE_CHOICE" = "enabled" ]; then
+            grep -q "^CONFIG_PSTORE=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_RAM=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_CONSOLE=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_PMSG=y$" "$DEFCONFIG" || exit 1
+          else
+            ! grep -q "^CONFIG_PSTORE=y$" "$DEFCONFIG" || exit 1
+            ! grep -q "^CONFIG_PSTORE_RAM=y$" "$DEFCONFIG" || exit 1
+            ! grep -q "^CONFIG_PSTORE_CONSOLE=y$" "$DEFCONFIG" || exit 1
+            ! grep -q "^CONFIG_PSTORE_PMSG=y$" "$DEFCONFIG" || exit 1
+          fi
+
       - name: Fetch BakaSU driver (official setup.sh)
         run: |
           curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s --
@@ -527,6 +676,21 @@ jobs:
                      -Idrivers/platform/msm/ipa/ipa_v2 \
                      -Idrivers/platform/msm/ipa/ipa_clients"
           ls -lh arch/arm64/boot/Image arch/arm64/boot/Image.gz-dtb
+
+      - name: Verify pstore in built .config
+        run: |
+          PSTORE_CHOICE="${{ inputs.pstore }}"
+          if [ -z "$PSTORE_CHOICE" ]; then PSTORE_CHOICE="enabled"; fi
+          echo "pstore choice: $PSTORE_CHOICE"
+          grep "PSTORE" .config
+          if [ "$PSTORE_CHOICE" = "enabled" ]; then
+            grep -q "^CONFIG_PSTORE=y$" .config || exit 1
+            grep -q "^CONFIG_PSTORE_RAM=y$" .config || exit 1
+            grep -q "^CONFIG_PSTORE_CONSOLE=y$" .config || exit 1
+          else
+            ! grep -q "^CONFIG_PSTORE=y$" .config || exit 1
+            ! grep -q "^CONFIG_PSTORE_RAM=y$" .config || exit 1
+          fi
 
       - name: Pack AnyKernel3 zip
         run: |
