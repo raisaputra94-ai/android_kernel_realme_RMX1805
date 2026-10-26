@@ -1,3 +1,21 @@
+# v18-fixdep-guard (2026-10-26): v17 + a host-tool guard in the Build step.
+# DIAGNOSIS of the 2026-10-26 06:45 UTC run (commit e08a81f, pstore=enabled):
+# the BakaSU hooks, low-RAM tweaks, ramoops DT fix, and pstore config
+# steps ALL succeeded (DT diff stat shown, all four PSTORE lines =y).
+# The first fatal error was later, in the Build step, before any DTB or
+# kernel code compiled:
+#   /bin/sh: 1: scripts/basic/fixdep: Permission denied
+#   make[1]: *** [Kbuild:21: kernel/bounds.s] Error 126
+#   make: *** [Makefile:1240: prepare0] Error 2
+# so the ramoops DT fix is NOT the cause and was NOT tested by that run.
+# The log alone does not prove whether fixdep lost its execute bit or
+# parallel jobs raced to rebuild it (both parallel jobs failed on fixdep
+# at the same second, 06:45:38). The guard below addresses both: it
+# builds the host tools serially first, forces fixdep executable, and
+# prints ls -l so the next log proves fixdep's mode at build start.
+# If the next run still fails on fixdep, that ls -l line is the evidence
+# that narrows it to a filesystem/runner issue rather than a race.
+#
 # v17-ramoops-dt (2026-10-26): v16 + the ramoops device-tree fix.
 # The device-tree analysis came from the dev (forwarded 2026-10-26) and was
 # verified claim-by-claim against fs/pstore/ram.c in this tree before
@@ -664,6 +682,13 @@ jobs:
           done
           export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
+          # Host-tool guard: see v18 header. Build host tools serially
+          # first so parallel jobs do not race to rebuild fixdep, then
+          # prove fixdep is executable before the parallel build starts.
+          make ARCH=arm64 -j1 scripts
+          chmod +x scripts/basic/fixdep
+          ls -l scripts/basic/fixdep
+          test -x scripts/basic/fixdep
           make -j$(nproc) LOCALVERSION= \
             KCFLAGS="-Idrivers/gpu/msm \
                      -Idrivers/bluetooth \
