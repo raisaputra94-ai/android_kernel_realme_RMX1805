@@ -1,3 +1,47 @@
+# v20-pstore-base-only (2026-10-28): v19 with the broken project mode REMOVED.
+# WHY: on-device proof 2026-10-28 (kernel 4.9.337-arcticfox-reei, v19 project run):
+#   base node status = "disabled", project node resized exactly as v19 intended
+#   (console 0x40000, record 0x20000, pmsg 0x20000), yet dmesg shows NO ramoops
+#   line at all and /dev/pmsg0 does not exist. The driver never probed.
+# ROOT CAUSE (drivers/of/platform.c in this tree):
+#   of_platform_default_populate_init() creates a platform device for ONLY the
+#   FIRST node with compatible = "ramoops" under /reserved-memory, found by
+#   of_find_compatible_node(), which does NOT check status. The base node
+#   (0x91400000) comes first in the DT, so disabling it makes
+#   of_platform_device_create() return NULL and the project node is NEVER tried.
+#   Disabling the base node therefore does not hand the slot to the project
+#   node - it deletes the slot entirely. v17/v18/v19 project mode could never
+#   work, regardless of sizes or config. This is proven, not a theory.
+# FIX IN v20:
+#   - pstore_region input REMOVED. There is no region choice anymore, so the
+#     broken project mode cannot be selected by mistake (including by
+#     re-running an old run, which reuses its original inputs).
+#   - The base node (0x91400000, the vendor's original ramoops area) is FIXED
+#     in place: single-cell sizes, record 0x20000, console 0x40000,
+#     pmsg 0x20000, no ftrace, any status="disabled" removed. Dump area =
+#     0x100000 - 0x40000 - 0 - 0x20000 = 0xA0000 = 5 records (fs/pstore/ram.c:
+#     dump area = size - console - ftrace - pmsg; record size is NOT
+#     subtracted).
+#   - The project node (ramoops@92100000 in sdm450-pmi632.dtsi) is DELETED
+#     outright (not disabled - disabling a ramoops node is exactly the bug
+#     above). It is referenced nowhere else in the tree, so deleting it only
+#     removes a second, never-probed ramoops area. The S88051AA1 node in the
+#     unused mtp-s3 file is left alone (that file is included by no DTS).
+#   - Fail-fast at THREE points, so a bad kernel can never again upload
+#     silently: (1) defconfig after the pstore edit, (2) .config immediately
+#     after `make defconfig` and BEFORE the parallel build, (3) built .config
+#     after the build (kept from v19, strengthened). The pstore step also
+#     prints the edited base node and the git diff, so the run log itself
+#     proves what changed.
+#   - pstore enabled/disabled choice KEPT (default enabled). Disabled means
+#     no pstore at all by design, and the DT is left untouched in that case.
+# EXPECTED AFTER FLASHING A v20 ENABLED BUILD:
+#   dmesg | grep -i ramoops  ->  "ramoops: attached 0x100000@0x91400000"
+#   and "Registered ramoops as persistent store backend"; /dev/pmsg0 exists;
+#   after a warm `adb reboot`, /sys/fs/pstore contains console-ramoops.
+#   NOTE: a ROM flash replaces boot.img and therefore this kernel - reflash
+#   the proven v20 kernel after any ROM flash if pstore is still wanted.
+#
 # v18-fixdep-guard (2026-10-26): v17 + a host-tool guard in the Build step.
 # DIAGNOSIS of the 2026-10-26 06:45 UTC run (commit e08a81f, pstore=enabled):
 # the BakaSU hooks, low-RAM tweaks, ramoops DT fix, and pstore config
@@ -83,14 +127,6 @@ on:
         options:
           - enabled
           - disabled
-      pstore_region:
-        description: 'ramoops node to use (project = default, base = fallback)'
-        type: choice
-        required: true
-        default: 'project'
-        options:
-          - project
-          - base
   push:
     branches:
       - ArcticFox
@@ -553,224 +589,111 @@ jobs:
           echo "=== low-RAM tweaks applied ==="
           git diff --stat | tail -5
 
-      - name: Fix pstore/ramoops (config + device tree)
+      - name: Fix pstore/ramoops (config + device tree, base only)
         run: |
-          cat > /tmp/pstore-fix.sh <<'SHEOF'
+          cat > /tmp/pstore-fix-v20.sh <<'SHEOF'
           #!/usr/bin/env bash
           #
-          # pstore-fix.sh - make pstore/ramoops work on the RMX1805 (ArcticFox) kernel.
-          #
-          # Run it from the kernel source root, BEFORE "make <defconfig>".
-          #
-          #   ./pstore-fix.sh                      # enabled, project node (default)
-          #   ./pstore-fix.sh enabled --region base
-          #   ./pstore-fix.sh disabled             # turn pstore off completely
-          #
-          # What it changes
-          #   defconfig  PSTORE, PSTORE_RAM, PSTORE_CONSOLE, PSTORE_PMSG = y
-          #              PSTORE_FTRACE = not set (the old "#CONFIG_..=n" comment
-          #              lines are removed, they are not real config lines)
-          #   device tree (enabled mode only), two ramoops nodes exist:
-          #     base     msm8953.dtsi       ramoops@0x91400000
-          #              record-size = <0x0 0x00020000> has TWO cells, the driver
-          #              reads only the first one (0), so the probe fails with
-          #              "The memory size and the record/console size must be non-zero".
-          #     project  sdm450-pmi632.dtsi pstore: ramoops@92100000 (vendor design)
-          #
-          #   --region project (default): disable the base node, resize the project
-          #            node (console 0x40000, record 0x20000, pmsg 0x20000).
-          #   --region base: fix the base node (single-cell sizes + console/pmsg)
-          #            and leave the project node alone. Use this if, after flashing,
-          #            dmesg shows no "ramoops: attached" line (project node not in
-          #            the DTB your phone boots).
-          #
-          # The driver (fs/pstore/ram.c) allows only ONE ramoops area; the first
-          # node that probes successfully wins. Dump area = region - console -
-          # ftrace - pmsg (the record size is NOT subtracted); it must hold at least
-          # one record. New project node: 0x100000 - 0x40000 - 0x20000 = 0xA0000 =
-          # 5 records.
-          #
-          # Not compiled or boot-tested. The region being free on your bootloader's
-          # memory map is an assumption. Keep the previous kernel zip.
-          #
-          # Safe to run twice. Exits non-zero if an expected line or node is missing.
-
+          # pstore-fix-v20.sh - v20: base node ONLY. The project mode is gone:
+          # disabling the base ramoops node leaves NO ramoops device at all
+          # (drivers/of/platform.c creates only the first compatible node),
+          # so project mode could never work. See the v20 header.
+          #   ./pstore-fix-v20.sh            # enabled (default)
+          #   ./pstore-fix-v20.sh disabled   # turn pstore off, DT untouched
+          # Run from the kernel source root, BEFORE "make <defconfig>".
           set -euo pipefail
-
-          MODE="enabled"
-          REGION="project"
+          MODE="${1:-enabled}"
           DEFCONFIG="arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig"
           DTS_DIR="arch/arm64/boot/dts/qcom"
-
-          usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
-
-          while [ $# -gt 0 ]; do
-            case "$1" in
-              enabled|disabled) MODE="$1" ;;
-              --region)    REGION="${2:-}"; shift ;;
-              --defconfig) DEFCONFIG="${2:-}"; shift ;;
-              --dts-dir)   DTS_DIR="${2:-}"; shift ;;
-              -h|--help)   usage 0 ;;
-              *) echo "unknown argument: $1" >&2; usage 1 ;;
-            esac
-            shift
-          done
-
-          case "$REGION" in project|base) ;; *) echo "ERROR: --region must be project or base" >&2; exit 1 ;; esac
-          [ -f "$DEFCONFIG" ] || { echo "ERROR: defconfig not found: $DEFCONFIG (run from the kernel source root)" >&2; exit 1; }
-
-          echo "pstore-fix: mode=$MODE region=$REGION"
-
-          # ---------------------------------------------------------------- defconfig
-          # set_cfg SYMBOL y|unset : write one clean line for SYMBOL. An existing line
-          # (set, "is not set", or the non-standard "#CONFIG_X=n" comment) is replaced
-          # in place, so line numbers do not move; extra duplicates are dropped. If
-          # there is no such line, a new one is appended.
-          set_cfg() {
-            local sym="$1" val="$2" line tmp
-            if [ "$val" = "y" ]; then line="CONFIG_${sym}=y"; else line="# CONFIG_${sym} is not set"; fi
-            if grep -Eq "^(# *)?CONFIG_${sym}(=| is not set)" "$DEFCONFIG"; then
-              tmp="$(mktemp)"
-              awk -v pat="^(# *)?CONFIG_${sym}(=| is not set)" -v new="$line" \
-                '$0 ~ pat { if (!done) { print new; done = 1 } ; next } { print }' "$DEFCONFIG" > "$tmp"
-              cat "$tmp" > "$DEFCONFIG"
-              rm -f "$tmp"
-            else
-              printf '%s\n' "$line" >> "$DEFCONFIG"
-            fi
-          }
-
-          # make sure the file ends with a newline before appending
-          [ -z "$(tail -c1 "$DEFCONFIG")" ] || printf '\n' >> "$DEFCONFIG"
-
+          case "$MODE" in enabled|disabled) ;; *) echo "ERROR: mode must be enabled or disabled" >&2; exit 1 ;; esac
+          [ -f "$DEFCONFIG" ] || { echo "ERROR: defconfig not found: $DEFCONFIG" >&2; exit 1; }
+          echo "pstore-fix-v20: mode=$MODE (region is always base)"
+          # --- defconfig: delete the non-standard "#CONFIG_PSTORE_*" comment
+          # lines first (scripts/config does not recognise them), then set.
+          sed -i '/^#CONFIG_PSTORE_/d' "$DEFCONFIG"
           if [ "$MODE" = "enabled" ]; then
-            set_cfg PSTORE y
-            set_cfg PSTORE_RAM y
-            set_cfg PSTORE_CONSOLE y
-            set_cfg PSTORE_PMSG y
-            set_cfg PSTORE_FTRACE unset
+            ./scripts/config --file "$DEFCONFIG" \
+              --enable CONFIG_PSTORE \
+              --enable CONFIG_PSTORE_RAM \
+              --enable CONFIG_PSTORE_CONSOLE \
+              --enable CONFIG_PSTORE_PMSG \
+              --disable CONFIG_PSTORE_FTRACE
           else
-            set_cfg PSTORE unset
-            set_cfg PSTORE_RAM unset
-            set_cfg PSTORE_CONSOLE unset
-            set_cfg PSTORE_PMSG unset
-            set_cfg PSTORE_FTRACE unset
+            ./scripts/config --file "$DEFCONFIG" \
+              --disable CONFIG_PSTORE \
+              --disable CONFIG_PSTORE_RAM \
+              --disable CONFIG_PSTORE_CONSOLE \
+              --disable CONFIG_PSTORE_PMSG \
+              --disable CONFIG_PSTORE_FTRACE
           fi
-
           echo "=== pstore lines in $DEFCONFIG ==="
-          grep -n "PSTORE" "$DEFCONFIG"
-
-          check() { grep -q -- "$1" "$DEFCONFIG" || { echo "ERROR: expected '$1' in $DEFCONFIG" >&2; exit 1; }; }
+          grep "PSTORE" "$DEFCONFIG"
           if [ "$MODE" = "enabled" ]; then
-            check '^CONFIG_PSTORE=y$'
-            check '^CONFIG_PSTORE_RAM=y$'
-            check '^CONFIG_PSTORE_CONSOLE=y$'
-            check '^CONFIG_PSTORE_PMSG=y$'
-          fi
-
-          if [ "$MODE" = "disabled" ]; then
-            echo "pstore-fix: done (pstore disabled, device tree untouched)"
+            grep -q "^CONFIG_PSTORE=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_RAM=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_CONSOLE=y$" "$DEFCONFIG" || exit 1
+            grep -q "^CONFIG_PSTORE_PMSG=y$" "$DEFCONFIG" || exit 1
+          else
+            echo "pstore-fix-v20: done (pstore disabled, device tree untouched)"
             exit 0
           fi
-
-          # ------------------------------------------------------------- device tree
+          # --- device tree: fix base node, DELETE project node ---
           command -v python3 >/dev/null || { echo "ERROR: python3 not found" >&2; exit 1; }
-
-          python3 - "$DTS_DIR" "$REGION" <<'PY'
+          python3 - "$DTS_DIR" <<'PY'
           import re, sys, pathlib
-
-          dts_dir, region = pathlib.Path(sys.argv[1]), sys.argv[2]
+          dts_dir = pathlib.Path(sys.argv[1])
           REGION_SIZE = 0x100000
-
-          def read(p):
-              # newline='' keeps CRLF files as they are
-              with open(p, newline='') as f:
-                  return f.read()
-
-          def write(p, s):
-              with open(p, 'w', newline='') as f:
-                  f.write(s)
-
-          def nl_of(s):
-              return "\r\n" if "\r\n" in s else "\n"
-
-          def dump_area(console, ftrace, pmsg):
-              # fs/pstore/ram.c: dump_mem_sz = size - console - ftrace - pmsg
-              return REGION_SIZE - console - ftrace - pmsg
-
-          # ---- base node (msm8953.dtsi) -------------------------------------------
+          # base node (msm8953.dtsi, inside &reserved-memory)
           p = dts_dir / "msm8953.dtsi"
-          s = read(p)
-          nl = nl_of(s)
+          s = p.read_text()
           m = re.search(r'ramoops@0x91400000\s*\{[^{}]*\};', s)
           if not m:
               sys.exit("ERROR: ramoops@0x91400000 node not found in msm8953.dtsi")
           block = m.group(0)
           indent = re.search(r'\n([ \t]*)compatible', block)
           ind = indent.group(1) if indent else "\t\t\t"
-
-          if region == "project":
-              # disable the broken base node
-              if 'status = "disabled"' not in block:
-                  block = re.sub(r'(compatible\s*=\s*"ramoops";)',
-                                 lambda mm: mm.group(1) + nl + ind + 'status = "disabled";',
-                                 block, count=1)
-              print("msm8953.dtsi: base ramoops node disabled")
-          else:
-              # fix the base node: single-cell sizes, add console + pmsg
-              block = re.sub(r'[ \t]*status\s*=\s*"disabled";\r?\n', '', block)
-              for prop in ("record-size", "console-size", "pmsg-size", "ftrace-size"):
-                  block = re.sub(r'[ \t]*' + prop + r'\s*=\s*<[^>]*>;\r?\n', '', block)
-              add = nl.join([ind + "record-size = <0x20000>;",
-                             ind + "console-size = <0x40000>;",
-                             ind + "pmsg-size = <0x20000>;"]) + nl
-              block = re.sub(r'(compatible\s*=\s*"ramoops";\r?\n(?:[ \t]*reg\s*=\s*<[^>]*>;\r?\n)?)',
-                             lambda mm: mm.group(1) + add, block, count=1)
-              assert 'console-size' in block and 'record-size = <0x20000>' in block, "base node edit failed"
-              assert dump_area(0x40000, 0, 0x20000) >= 0x20000, "base node sizes leave no dump area"
-              print("msm8953.dtsi: base ramoops node fixed (record 0x20000, console 0x40000, pmsg 0x20000)")
+          nl = "\r\n" if "\r\n" in s else "\n"
+          block = re.sub(r'[ \t]*status\s*=\s*"disabled";\r?\n', '', block)
+          for prop in ("record-size", "console-size", "pmsg-size", "ftrace-size"):
+              block = re.sub(r'[ \t]*' + prop + r'\s*=\s*<[^>]*>;?\r?\n', '', block)
+          add = nl.join([ind + "record-size = <0x20000>;",
+                         ind + "console-size = <0x40000>;",
+                         ind + "pmsg-size = <0x20000>;"]) + nl
+          block = re.sub(r'(compatible\s*=\s*"ramoops";\r?\n(?:[ \t]*reg\s*=\s*<[^>]*>;\r?\n)?)',
+                         lambda mm: mm.group(1) + add, block, count=1)
+          assert 'record-size = <0x20000>' in block, "base node record-size edit failed"
+          assert 'console-size = <0x40000>' in block, "base node console-size edit failed"
+          assert 'pmsg-size = <0x20000>' in block, "base node pmsg-size edit failed"
+          assert 'status = "disabled"' not in block, "base node still disabled"
+          assert REGION_SIZE - 0x40000 - 0 - 0x20000 >= 0x20000, "base node sizes leave no dump area"
           s = s[:m.start()] + block + s[m.end():]
-          write(p, s)
-
-          # ---- project node (sdm450-pmi632.dtsi) ----------------------------------
-          if region == "project":
-              p = dts_dir / "sdm450-pmi632.dtsi"
-              s = read(p)
-              nl = nl_of(s)
-              m = re.search(r'(?m)^([ \t]*)pstore: ramoops@92100000\s*\{[^{}]*\};', s)
-              if not m:
-                  sys.exit("ERROR: pstore: ramoops@92100000 node not found in sdm450-pmi632.dtsi")
-              ind = m.group(1)
-              new = nl.join([
-                  ind + "pstore: ramoops@92100000 {",
-                  ind + "\tcompatible = \"ramoops\";",
-                  ind + "\treg = <0 0x92100000 0 0x100000>;",
-                  ind + "\tecc-size\t= <0x10>;",
-                  ind + "\tconsole-size\t= <0x40000>;",
-                  ind + "\trecord-size\t= <0x20000>;",
-                  ind + "\tpmsg-size\t= <0x20000>;",
-                  ind + "};",
-              ])
-              assert dump_area(0x40000, 0, 0x20000) >= 0x20000, "project node sizes leave no dump area"
-              s = s[:m.start()] + new + s[m.end():]
-              write(p, s)
-              print("sdm450-pmi632.dtsi: project pstore node resized "
-                    "(console 0x40000, record 0x20000, pmsg 0x20000, dump area 0xA0000 = 5 records)")
+          p.write_text(s)
+          print("msm8953.dtsi: base ramoops node fixed (record 0x20000, console 0x40000, pmsg 0x20000, enabled)")
+          print("--- edited base node ---")
+          print(block)
+          # project node (sdm450-pmi632.dtsi): DELETE outright, never disable
+          p = dts_dir / "sdm450-pmi632.dtsi"
+          s = p.read_text()
+          m = re.search(r'(?m)^[ \t]*pstore: ramoops@92100000\s*\{[^{}]*\};\r?\n', s)
+          if not m:
+              sys.exit("ERROR: pstore: ramoops@92100000 node not found in sdm450-pmi632.dtsi - tree changed, stop instead of building blind")
+          s = s[:m.start()] + s[m.end():]
+          assert "ramoops@92100000" not in s, "project node deletion failed"
+          p.write_text(s)
+          print("sdm450-pmi632.dtsi: project ramoops node DELETED (was second, never-probed area)")
           PY
-
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "=== git diff --stat ==="
+            echo "=== git diff --stat (DT + defconfig) ==="
             git diff --stat | tail -5 || true
+            echo "=== git diff: msm8953.dtsi + sdm450-pmi632.dtsi ==="
+            git diff -- arch/arm64/boot/dts/qcom/msm8953.dtsi arch/arm64/boot/dts/qcom/sdm450-pmi632.dtsi || true
           fi
-          echo "pstore-fix: done"
-          echo "After flashing: dmesg | grep -i ramoops   (expect 'ramoops: attached ...')"
-          echo "If there is no 'attached' line, rebuild with:  ./pstore-fix.sh enabled --region base"
+          echo "pstore-fix-v20: done"
+          echo "After flashing: dmesg | grep -i ramoops   (expect 'ramoops: attached 0x100000@0x91400000')"
           SHEOF
           PSTORE_CHOICE="${{ inputs.pstore }}"
           if [ -z "$PSTORE_CHOICE" ]; then PSTORE_CHOICE="enabled"; fi
-          PSTORE_REGION="${{ inputs.pstore_region }}"
-          if [ -z "$PSTORE_REGION" ]; then PSTORE_REGION="project"; fi
-          bash /tmp/pstore-fix.sh "$PSTORE_CHOICE" --region "$PSTORE_REGION"
+          bash /tmp/pstore-fix-v20.sh "$PSTORE_CHOICE"
 
       - name: Fetch BakaSU driver (official setup.sh)
         run: |
@@ -815,6 +738,18 @@ jobs:
           done
           export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
+          # v20 fail-fast #2: prove the built .config carries pstore BEFORE
+          # the parallel build, so a config regression fails here loudly
+          # instead of uploading a kernel that silently has no pstore.
+          PSTORE_CHOICE2="${{ inputs.pstore }}"
+          if [ -z "$PSTORE_CHOICE2" ]; then PSTORE_CHOICE2="enabled"; fi
+          if [ "$PSTORE_CHOICE2" = "enabled" ]; then
+            grep "PSTORE" .config
+            grep -q "^CONFIG_PSTORE=y$" .config || { echo "ERROR: PSTORE not y in .config after defconfig" >&2; exit 1; }
+            grep -q "^CONFIG_PSTORE_RAM=y$" .config || { echo "ERROR: PSTORE_RAM not y in .config after defconfig" >&2; exit 1; }
+            grep -q "^CONFIG_PSTORE_CONSOLE=y$" .config || { echo "ERROR: PSTORE_CONSOLE not y in .config after defconfig - pstore-fix did not reach defconfig" >&2; exit 1; }
+            grep -q "^CONFIG_PSTORE_PMSG=y$" .config || { echo "ERROR: PSTORE_PMSG not y in .config after defconfig - pstore-fix did not reach defconfig" >&2; exit 1; }
+          fi
           # Host-tool guard: see v18 header. Build host tools serially
           # first so parallel jobs do not race to rebuild fixdep, then
           # prove fixdep is executable before the parallel build starts.
@@ -849,6 +784,8 @@ jobs:
           else
             ! grep -q "^CONFIG_PSTORE=y$" .config || exit 1
             ! grep -q "^CONFIG_PSTORE_RAM=y$" .config || exit 1
+            ! grep -q "^CONFIG_PSTORE_CONSOLE=y$" .config || exit 1
+            ! grep -q "^CONFIG_PSTORE_PMSG=y$" .config || exit 1
           fi
 
       - name: Pack AnyKernel3 zip
