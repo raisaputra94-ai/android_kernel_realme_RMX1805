@@ -1,3 +1,47 @@
+# v21-dt2w-combined (2026-10-28): v20 verbatim + ONE new step, "Apply DT2W
+# combined patch (ILI9881)", inserted immediately before "Build kernel".
+# Nothing else changed: pstore base fix, BakaSU hooks, fixdep guard, 2GB
+# low-RAM tweaks, toolchain/ccache, AnyKernel3 packing, and the pstore
+# input (default enabled) are all carried over from v20 untouched.
+#
+# WHAT THE DT2W STEP DOES (driver source only, no defconfig change):
+#   Applies ili9881_dt2w_combined.patch to the checked-out tree, then
+#   fails fast if any marker is missing, BEFORE the parallel build starts:
+#   - config.c: default isEnableGesture=true + gesture_backup=true at probe,
+#     psensor_close reset removed, so DT2W is ON from boot and switchable
+#     via /proc/touchpanel/double_tap_enable (1 = on, 0 = off until reboot).
+#     Suspend does NOT force the value, so a proc write of 0 genuinely
+#     turns it off.
+#   - finger_report.c (from the user's Light branch): gesture report key
+#     KEY_F4 -> KEY_WAKEUP (143, System Wake Up) + set_bit(KEY_WAKEUP).
+#     F4 is ignored by Lineage; WAKEUP is the key Android wakes on, with
+#     no power-menu side effects. The KEY_POWER report stays inside its
+#     disabled #if 0 block, unchanged.
+#   - platform.c (Light): fb notifier handles FB_EVENT_BLANK as well as
+#     FB_EARLY_EVENT_BLANK; the IRQ-disable on suspend is now conditional
+#     on gesture being off; enable_irq_wake() re-added after ESD reset.
+# WHY BOTH HALVES: Light fixed the report layer but left the enable
+#   default off, so it still needed a userspace echo 1. Our default-on
+#   patch fixed the enable layer but left F4 reporting, which Lineage
+#   ignores. Neither half alone wakes the phone; together they cover
+#   enable + report. The Settings "Tap to wake" toggle is STILL not wired
+#   by this kernel: that needs the separate userspace bridge (Magisk
+#   service script dt2w_tap_to_wake_service.sh, or the ROM-baked service
+#   previewed on top of v19). This kernel only makes the proc node the
+#   working switch, with ON as the default.
+# EXPECTED AFTER FLASHING A v21 BUILD (test, in order):
+#   1. uname -a timestamp must be newer than the v20 build (gate: the
+#      flash actually took the new kernel, not the old boot.img).
+#   2. cat /proc/touchpanel/double_tap_enable -> 1, without any echo.
+#   3. Lock, wait 10 s, double-tap centre -> screen wakes (KEY_WAKEUP).
+#   4. echo 0 > proc node -> double-tap no longer wakes; echo 1 -> wakes
+#      again; reboot -> back to 1 by default.
+# NOTE: a ROM flash replaces boot.img and therefore this kernel - reflash
+#   the proven v21 kernel after any ROM flash if DT2W is still wanted.
+#   The combined patch file itself is EMBEDDED below as a heredoc (the
+#   GitHub checkout does not have this workspace's patch file), and its
+#   md5 is recorded in the step so the run log proves which patch ran.
+#
 # v20-pstore-base-only (2026-10-28): v19 with the broken project mode REMOVED.
 # WHY: on-device proof 2026-10-28 (kernel 4.9.337-arcticfox-reei, v19 project run):
 #   base node status = "disabled", project node resized exactly as v19 intended
@@ -716,6 +760,103 @@ jobs:
         with:
           key: rmx1805-kernel-${{ github.ref_name }}
           max-size: 2G
+
+      - name: Apply DT2W combined patch (ILI9881)
+        run: |
+          set -euo pipefail
+          cat > /tmp/dt2w_combined.patch <<'PATCHEOF'
+          --- a/drivers/input/touchscreen/ili9881_18663/core/config.c
+          +++ b/drivers/input/touchscreen/ili9881_18663/core/config.c
+          @@ -471,11 +471,6 @@
+           			}
+           		ilitek_platform_enable_irq();
+           		#endif
+          -		if(psensor_close == true) {
+          -			core_config->isEnableGesture = false;
+          -			core_config_sleep_ctrl(false);
+          -			ipio_info("suspend set sleep ctrl redo\n");
+          -		}
+           		gesture_done = true;
+            }else {
+           	/*res = gpio_request(ipd->lcd_reset_gpio, "ILITEK_LCD_RESET");
+          @@ -1128,8 +1123,14 @@
+           			core_config->chip_type = 0x0000;
+           
+           			core_config->do_ic_reset = false;
+          -			core_config->isEnableGesture = false;
+          -			core_config->gesture_backup = false;
+          +			/* DT2W default-on (2026-10-28): on from boot, switchable
+          +			 * via /proc/touchpanel/double_tap_enable (1 = on, 0 = off
+          +			 * until next reboot). Suspend does NOT force this value,
+          +			 * so a proc write of 0 genuinely turns it off. Settings
+          +			 * toggle still does nothing on this ROM -- nothing in the
+          +			 * tree reads that setting and writes this node. */
+          +			core_config->isEnableGesture = true;
+          +			core_config->gesture_backup = true;
+           			core_config->gameSwitch = false;
+           
+           			if (core_config->chip_id == CHIP_TYPE_ILI7807) {
+          --- a/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
+          +++ b/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
+          @@ -595,9 +595,9 @@
+           		res = ilitek_get_gesture_info(gesture_report_data);
+           		if(res)
+           			{
+          -			input_report_key(core_fr->input_device, KEY_F4, 1);
+          +			input_report_key(core_fr->input_device, KEY_WAKEUP, 1);
+           			input_sync(core_fr->input_device);
+          -			input_report_key(core_fr->input_device, KEY_F4, 0);
+          +			input_report_key(core_fr->input_device, KEY_WAKEUP, 0);
+           			input_sync(core_fr->input_device);
+           			}
+           		goto out;
+          @@ -999,6 +999,7 @@
+           	set_bit(EV_KEY, core_fr->input_device->evbit);
+           	set_bit(BTN_TOUCH, core_fr->input_device->keybit);
+           	set_bit(BTN_TOOL_FINGER, core_fr->input_device->keybit);
+          +	set_bit(KEY_WAKEUP, core_fr->input_device->keybit);
+           	set_bit(INPUT_PROP_DIRECT, core_fr->input_device->propbit);
+           
+           	if (core_fr->isSetResolution) {
+          --- a/drivers/input/touchscreen/ili9881_18663/platform.c
+          +++ b/drivers/input/touchscreen/ili9881_18663/platform.c
+          @@ -417,7 +417,7 @@
+           	 *  FB_EVENT_BLANK(0x09): A hardware display blank change occurred.
+           	 *  FB_EARLY_EVENT_BLANK(0x10): A hardware display blank early change occurred.
+           	 */
+          -	if (evdata && evdata->data &&  event == FB_EARLY_EVENT_BLANK) {
+          +	if (evdata && evdata->data && (event == FB_EARLY_EVENT_BLANK || event == FB_EVENT_BLANK)) {
+           		blank = evdata->data;
+           
+           #if (TP_PLATFORM == PT_SPRD)
+          @@ -429,7 +429,7 @@
+           			ipio_info("TP Suspend\n");
+           
+           			/*if (!core_firmware->isUpgrading) */{
+          -				//if (!core_config->isEnableGesture)
+          +				if (!core_config->isEnableGesture)
+           					ilitek_platform_disable_irq();
+           
+           				if (ipd->isEnablePollCheckPower)
+          @@ -707,6 +707,7 @@
+           	  ipio_info("write command error\n");
+           	}
+           	core_fr->isEnableFR = true;
+          +	enable_irq_wake(ipd->isr_gpio);
+           	ipio_info("esd gesture reset Done\n");
+           
+           }
+          PATCHEOF
+          echo "DT2W combined patch md5 (embedded): 04f8df5671858cd9d617a8126c58b470"
+          md5sum /tmp/dt2w_combined.patch
+          patch -p1 < /tmp/dt2w_combined.patch
+          echo "=== DT2W marker checks (fail fast, before build) ==="
+          grep -q "isEnableGesture = true" drivers/input/touchscreen/ili9881_18663/core/config.c || { echo "ERROR: DT2W default-on not in config.c" >&2; exit 1; }
+          grep -q "KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP not in finger_report.c" >&2; exit 1; }
+          grep -q "set_bit(KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP keybit not set" >&2; exit 1; }
+          if grep -q "KEY_F4" drivers/input/touchscreen/ili9881_18663/core/finger_report.c; then echo "ERROR: KEY_F4 still present in finger_report.c" >&2; exit 1; fi
+          grep -q "event == FB_EVENT_BLANK" drivers/input/touchscreen/ili9881_18663/platform.c || { echo "ERROR: FB_EVENT_BLANK handling not in platform.c" >&2; exit 1; }
+          echo "DT2W combined patch applied and verified"
 
       - name: Build kernel
         run: |
