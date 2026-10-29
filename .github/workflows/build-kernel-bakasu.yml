@@ -1,44 +1,89 @@
-# v21-dt2w-combined (2026-10-28): v20 verbatim + ONE new step, "Apply DT2W
-# combined patch (ILI9881)", inserted immediately before "Build kernel".
+# v24-dt2w-combined-nocache (2026-10-29): v23 verbatim
+# MINUS nothing, PLUS exactly one change: the DT2W step now embeds the
+# user's uploaded dt2w-rmx1805-combined.patch (md5 7610046f8ab75abffabd6e41d562e6e9)
+# instead of ili9881_dt2w_light_true.patch. That uploaded patch = Light
+# driver changes (finger_report/platform/userspace, 12 lines) + ONE extra
+# DTS line: regulator-always-on in the iovdd_gpio_vreg node of
+# arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi. It contains NO config.c /
+# default-on change, so proc still boots at 0 and the original module or
+# manual echo is still needed to enable. This is NOT the set-aside
+# ili9881_dt2w_combined_v2.patch (Light + default-on) from 2026-10-29
+# 13:00 SGT, which must not be used. No-cache v23 base is untouched:
+# no ccache step, package, or wrapper anywhere. Caveat carried over
+# from the v23 check: the DTS hunk is in the sdm450-pmi632-mtp-s3 DTB
+# chain but not the plain sdm450-pmi632 chain, and which DTB the
+# bootloader picks on current builds is unproven, so the DTS line is
+# not guaranteed to reach the booted DTB. User confirmed building this version 2026-10-29 13:09 SGT; v23 remains on disk untouched.
+#
+# v23-dt2w-light-nocache (2026-10-29): v22 verbatim MINUS ccache.
+# The user said they do not need cache anymore in this workflow, and
+# they are right: ccache was purely a speed optimisation, never a
+# correctness requirement. Everything else is carried over from v22
+# untouched: pstore base fix, BakaSU hooks, fixdep guard, 2GB low-RAM
+# tweaks, DT2W Light patch (exact, no default-on), toolchain, AnyKernel3
+# packing, and the pstore input (default enabled).
+#
+# WHAT WAS REMOVED, ALL THREE PIECES (removing only one would leave a
+# half-cache behind, so all three go together):
+#   1. The "ccache setup" step (hendrikmuhs/ccache-action@v1.2, key
+#      rmx1805-kernel-<branch>, max-size 2G) - the step that restored
+#      and saved the cache directory across runs.
+#   2. The ccache package from the apt install line in the toolchain
+#      step (bc bison flex libssl-dev zip remain).
+#   3. The ccache-bin wrapper loop in "Build kernel" (only gcc went
+#      through ccache; the rest exec'd the real binary). CROSS_COMPILE
+#      now points straight at the real toolchain directory.
+# TRADE-OFF, STATED PLAINLY: every GitHub run now compiles the full
+# kernel from scratch, so runs will take longer than the cached runs
+# did (v18's 8m4s run benefited from cache). In return there is no
+# 2 GB cache to store, no third-party cache action in the flow, and no
+# cache-related doubt about whether a build is fresh. If the slower
+# runs ever hurt, v22 (with cache) is still on disk untouched and can
+# be pushed again instead - no work is lost by this removal.
+#
+# v22-dt2w-light (2026-10-29): v20 verbatim + ONE new step, "Apply DT2W
+# Light patch (ILI9881, exact)", inserted immediately before "Build kernel".
 # Nothing else changed: pstore base fix, BakaSU hooks, fixdep guard, 2GB
 # low-RAM tweaks, toolchain/ccache, AnyKernel3 packing, and the pstore
 # input (default enabled) are all carried over from v20 untouched.
 #
 # WHAT THE DT2W STEP DOES (driver source only, no defconfig change):
-#   Applies ili9881_dt2w_combined.patch to the checked-out tree, then
-#   fails fast if any marker is missing, BEFORE the parallel build starts:
-#   - config.c: default isEnableGesture=true + gesture_backup=true at probe,
-#     psensor_close reset removed, so DT2W is ON from boot and switchable
-#     via /proc/touchpanel/double_tap_enable (1 = on, 0 = off until reboot).
-#     Suspend does NOT force the value, so a proc write of 0 genuinely
-#     turns it off.
-#   - finger_report.c (from the user's Light branch): gesture report key
-#     KEY_F4 -> KEY_WAKEUP (143, System Wake Up) + set_bit(KEY_WAKEUP).
-#     F4 is ignored by Lineage; WAKEUP is the key Android wakes on, with
-#     no power-menu side effects. The KEY_POWER report stays inside its
-#     disabled #if 0 block, unchanged.
-#   - platform.c (Light): fb notifier handles FB_EVENT_BLANK as well as
+#   Applies ili9881_dt2w_light_true.patch to the checked-out tree, then
+#   fails fast if any marker is missing, BEFORE the parallel build starts.
+#   This patch is EXACTLY the user's own June 2026 patches, with NO
+#   assistant enhancement, NO combined default-on change, NO other edit:
+#   - finger_report.c: gesture report key KEY_F4 -> KEY_WAKEUP (143,
+#     System Wake Up) + set_bit(KEY_WAKEUP). F4 is ignored by Lineage;
+#     WAKEUP is the key Android wakes on, with no power-menu side
+#     effects. The KEY_POWER report stays inside its disabled #if 0
+#     block, unchanged.
+#   - platform.c: fb notifier handles FB_EVENT_BLANK as well as
 #     FB_EARLY_EVENT_BLANK; the IRQ-disable on suspend is now conditional
 #     on gesture being off; enable_irq_wake() re-added after ESD reset.
-# WHY BOTH HALVES: Light fixed the report layer but left the enable
-#   default off, so it still needed a userspace echo 1. Our default-on
-#   patch fixed the enable layer but left F4 reporting, which Lineage
-#   ignores. Neither half alone wakes the phone; together they cover
-#   enable + report. The Settings "Tap to wake" toggle is STILL not wired
-#   by this kernel: that needs the separate userspace bridge (Magisk
-#   service script dt2w_tap_to_wake_service.sh, or the ROM-baked service
-#   previewed on top of v19). This kernel only makes the proc node the
-#   working switch, with ON as the default.
-# EXPECTED AFTER FLASHING A v21 BUILD (test, in order):
-#   1. uname -a timestamp must be newer than the v20 build (gate: the
+#   - userspace.c: ilitek_proc_gesture_write "on" also sets g_gesture=1
+#     and "off" also sets g_gesture=0, keeping g_gesture in sync with
+#     isEnableGesture on the /proc/ilitek/gesture path the original
+#     Magisk module uses. The oppo proc path already set g_gesture.
+#   - config.c: UNTOUCHED. The step fails fast if config.c shows any
+#     default-on change, so this build cannot silently become the
+#     combined version. The DT2W default stays OFF at boot.
+#   The user's dt2w-irq-fix.patch is NOT applied separately: its single
+#   hunk is already inside dt2w-full-fix.patch, so applying it again
+#   would conflict with itself.
+# EXPECTED AFTER FLASHING A v22 BUILD (test, in order):
+#   1. uname -a timestamp must be newer than the v21 build (gate: the
 #      flash actually took the new kernel, not the old boot.img).
-#   2. cat /proc/touchpanel/double_tap_enable -> 1, without any echo.
-#   3. Lock, wait 10 s, double-tap centre -> screen wakes (KEY_WAKEUP).
-#   4. echo 0 > proc node -> double-tap no longer wakes; echo 1 -> wakes
-#      again; reboot -> back to 1 by default.
+#   2. cat /proc/touchpanel/double_tap_enable -> 0, WITHOUT any echo.
+#      That is CORRECT for this version: Light does not change the
+#      default. A reading of 1 here would mean the wrong patch ran.
+#   3. Enable DT2W the original way: install the original Magisk module
+#      (id dt2w-realme2, service.sh writes "on" to /proc/ilitek/gesture
+#      after boot_completed + 5 s), OR manually: echo 1 >
+#      /proc/touchpanel/double_tap_enable. Then lock, wait 10 s,
+#      double-tap centre -> screen wakes (KEY_WAKEUP).
 # NOTE: a ROM flash replaces boot.img and therefore this kernel - reflash
-#   the proven v21 kernel after any ROM flash if DT2W is still wanted.
-#   The combined patch file itself is EMBEDDED below as a heredoc (the
+#   the proven v22 kernel after any ROM flash if DT2W is still wanted.
+#   The Light patch file itself is EMBEDDED below as a heredoc (the
 #   GitHub checkout does not have this workspace's patch file), and its
 #   md5 is recorded in the step so the run log proves which patch ran.
 #
@@ -747,7 +792,7 @@ jobs:
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bc bison flex libssl-dev ccache zip
+          sudo apt-get install -y -qq bc bison flex libssl-dev zip
           mkdir -p toolchain
           cd toolchain
           curl -sSL -o gcc.tar.xz \
@@ -755,51 +800,25 @@ jobs:
           tar -xf gcc.tar.xz
           ./gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc --version
 
-      - name: ccache setup
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: rmx1805-kernel-${{ github.ref_name }}
-          max-size: 2G
-
-      - name: Apply DT2W combined patch (ILI9881)
+      - name: Apply DT2W combined patch (ILI9881 + regulator, exact)
         run: |
           set -euo pipefail
           cat > /tmp/dt2w_combined.patch <<'PATCHEOF'
-          --- a/drivers/input/touchscreen/ili9881_18663/core/config.c
-          +++ b/drivers/input/touchscreen/ili9881_18663/core/config.c
-          @@ -471,11 +471,6 @@
-           			}
-           		ilitek_platform_enable_irq();
-           		#endif
-          -		if(psensor_close == true) {
-          -			core_config->isEnableGesture = false;
-          -			core_config_sleep_ctrl(false);
-          -			ipio_info("suspend set sleep ctrl redo\n");
-          -		}
-           		gesture_done = true;
-            }else {
-           	/*res = gpio_request(ipd->lcd_reset_gpio, "ILITEK_LCD_RESET");
-          @@ -1128,8 +1123,14 @@
-           			core_config->chip_type = 0x0000;
-           
-           			core_config->do_ic_reset = false;
-          -			core_config->isEnableGesture = false;
-          -			core_config->gesture_backup = false;
-          +			/* DT2W default-on (2026-10-28): on from boot, switchable
-          +			 * via /proc/touchpanel/double_tap_enable (1 = on, 0 = off
-          +			 * until next reboot). Suspend does NOT force this value,
-          +			 * so a proc write of 0 genuinely turns it off. Settings
-          +			 * toggle still does nothing on this ROM -- nothing in the
-          +			 * tree reads that setting and writes this node. */
-          +			core_config->isEnableGesture = true;
-          +			core_config->gesture_backup = true;
-           			core_config->gameSwitch = false;
-           
-           			if (core_config->chip_id == CHIP_TYPE_ILI7807) {
+          diff --git a/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi b/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
+          index be20e08..8caf238 100644
+          --- a/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
+          +++ b/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
+          @@ -1190,4 +1190,5 @@
+            	enable-active-high;
+           	regulator-boot-on;
+          +	regulator-always-on;
+           	status = "ok";
+            };
+          diff --git a/drivers/input/touchscreen/ili9881_18663/core/finger_report.c b/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
+          index 91d6056..fa98e10 100644
           --- a/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
           +++ b/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
-          @@ -595,9 +595,9 @@
-           		res = ilitek_get_gesture_info(gesture_report_data);
+          @@ -596,7 +596,7 @@ static int finger_report_ver_5_0(void)
            		if(res)
            			{
           -			input_report_key(core_fr->input_device, KEY_F4, 1);
@@ -809,75 +828,75 @@ jobs:
           +			input_report_key(core_fr->input_device, KEY_WAKEUP, 0);
            			input_sync(core_fr->input_device);
            			}
-           		goto out;
-          @@ -999,6 +999,7 @@
-           	set_bit(EV_KEY, core_fr->input_device->evbit);
+          @@ -1000,4 +1000,5 @@ void core_fr_input_set_param(struct input_dev *input_device)
            	set_bit(BTN_TOUCH, core_fr->input_device->keybit);
            	set_bit(BTN_TOOL_FINGER, core_fr->input_device->keybit);
           +	set_bit(KEY_WAKEUP, core_fr->input_device->keybit);
            	set_bit(INPUT_PROP_DIRECT, core_fr->input_device->propbit);
            
-           	if (core_fr->isSetResolution) {
+          diff --git a/drivers/input/touchscreen/ili9881_18663/platform.c b/drivers/input/touchscreen/ili9881_18663/platform.c
+          index 92effb1..b2aa0f3 100644
           --- a/drivers/input/touchscreen/ili9881_18663/platform.c
           +++ b/drivers/input/touchscreen/ili9881_18663/platform.c
-          @@ -417,7 +417,7 @@
-           	 *  FB_EVENT_BLANK(0x09): A hardware display blank change occurred.
+          @@ -418,5 +418,5 @@ static int ilitek_platform_notifier_fb(struct notifier_block *self, unsigned lon
            	 *  FB_EARLY_EVENT_BLANK(0x10): A hardware display blank early change occurred.
            	 */
           -	if (evdata && evdata->data &&  event == FB_EARLY_EVENT_BLANK) {
           +	if (evdata && evdata->data && (event == FB_EARLY_EVENT_BLANK || event == FB_EVENT_BLANK)) {
            		blank = evdata->data;
            
-           #if (TP_PLATFORM == PT_SPRD)
-          @@ -429,7 +429,7 @@
-           			ipio_info("TP Suspend\n");
+          @@ -430,5 +430,5 @@ static int ilitek_platform_notifier_fb(struct notifier_block *self, unsigned lon
            
            			/*if (!core_firmware->isUpgrading) */{
           -				//if (!core_config->isEnableGesture)
           +				if (!core_config->isEnableGesture)
            					ilitek_platform_disable_irq();
            
-           				if (ipd->isEnablePollCheckPower)
-          @@ -707,6 +707,7 @@
-           	  ipio_info("write command error\n");
+          @@ -708,4 +708,5 @@ void ilitek_esd_gesture_reset(void)
            	}
            	core_fr->isEnableFR = true;
           +	enable_irq_wake(ipd->isr_gpio);
            	ipio_info("esd gesture reset Done\n");
            
-           }
+          diff --git a/drivers/input/touchscreen/ili9881_18663/userspace.c b/drivers/input/touchscreen/ili9881_18663/userspace.c
+          index 20fffda..c947d37 100644
+          --- a/drivers/input/touchscreen/ili9881_18663/userspace.c
+          +++ b/drivers/input/touchscreen/ili9881_18663/userspace.c
+          @@ -1412,7 +1412,9 @@ static ssize_t ilitek_proc_gesture_write(struct file *filp, const char *buff, si
+           		ipio_info("enable gesture mode\n");
+           		core_config->isEnableGesture = true;
+          +		g_gesture = 1;
+           	} else if (strcmp(cmd, "off") == 0) {
+           		ipio_info("disable gesture mode\n");
+           		core_config->isEnableGesture = false;
+          +		g_gesture = 0;
+           	} else
+           		ipio_err("Unknown command\n");
           PATCHEOF
-          echo "DT2W combined patch md5 (embedded): 04f8df5671858cd9d617a8126c58b470"
+          echo "DT2W combined patch md5 (embedded): 7610046f8ab75abffabd6e41d562e6e9"
           md5sum /tmp/dt2w_combined.patch
           patch -p1 < /tmp/dt2w_combined.patch
-          echo "=== DT2W marker checks (fail fast, before build) ==="
-          grep -q "isEnableGesture = true" drivers/input/touchscreen/ili9881_18663/core/config.c || { echo "ERROR: DT2W default-on not in config.c" >&2; exit 1; }
+          echo "=== DT2W combined marker checks (fail fast, before build) ==="
           grep -q "KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP not in finger_report.c" >&2; exit 1; }
           grep -q "set_bit(KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP keybit not set" >&2; exit 1; }
           if grep -q "KEY_F4" drivers/input/touchscreen/ili9881_18663/core/finger_report.c; then echo "ERROR: KEY_F4 still present in finger_report.c" >&2; exit 1; fi
           grep -q "event == FB_EVENT_BLANK" drivers/input/touchscreen/ili9881_18663/platform.c || { echo "ERROR: FB_EVENT_BLANK handling not in platform.c" >&2; exit 1; }
+          grep -q "enable_irq_wake(ipd->isr_gpio)" drivers/input/touchscreen/ili9881_18663/platform.c || { echo "ERROR: ESD enable_irq_wake not in platform.c" >&2; exit 1; }
+          grep -q "g_gesture = 1" drivers/input/touchscreen/ili9881_18663/userspace.c || { echo "ERROR: g_gesture = 1 not in userspace.c" >&2; exit 1; }
+          grep -q "g_gesture = 0" drivers/input/touchscreen/ili9881_18663/userspace.c || { echo "ERROR: g_gesture = 0 not in userspace.c" >&2; exit 1; }
+          grep -q "regulator-always-on" arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi || { echo "ERROR: regulator-always-on not in msm8953-mtp.dtsi" >&2; exit 1; }
+          if grep -q "DT2W default-on" drivers/input/touchscreen/ili9881_18663/core/config.c; then echo "ERROR: config.c carries a default-on change - this must be the exact combined patch only" >&2; exit 1; fi
+          grep -q "isEnableGesture = false" drivers/input/touchscreen/ili9881_18663/core/config.c || { echo "ERROR: config.c default changed - this must be the exact combined patch only" >&2; exit 1; }
           echo "DT2W combined patch applied and verified"
-
       - name: Build kernel
         run: |
           export ARCH=arm64
           GCC_DIR=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin
-          # Wrapper scripts for every cross tool. Only gcc goes through
-          # ccache; the rest exec the real binary directly. This keeps CC
-          # a single word, because kernel scripts (e.g. the stack-protector
-          # check) pass $(CC) as a single $1, and "CC=ccache <compiler>"
-          # breaks them. It also satisfies $(CROSS_COMPILE)ld/nm/objdump/...
-          mkdir -p $GITHUB_WORKSPACE/ccache-bin
-          for tool in "$GCC_DIR"/aarch64-linux-*; do
-            name=$(basename "$tool")
-            if [ "$name" = "aarch64-linux-gcc" ]; then
-              printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$tool" > "$GITHUB_WORKSPACE/ccache-bin/$name"
-            else
-              printf '#!/bin/sh\nexec "%s" "$@"\n' "$tool" > "$GITHUB_WORKSPACE/ccache-bin/$name"
-            fi
-            chmod +x "$GITHUB_WORKSPACE/ccache-bin/$name"
-          done
-          export CROSS_COMPILE=$GITHUB_WORKSPACE/ccache-bin/aarch64-linux-
+          # No ccache in v23 (removed at the user's call): CROSS_COMPILE
+          # points straight at the real toolchain, so every run compiles
+          # the whole kernel from scratch. Slower, but no cache directory,
+          # no third-party cache action, and no stale-cache doubt.
+          export CROSS_COMPILE=$GCC_DIR/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
           # v20 fail-fast #2: prove the built .config carries pstore BEFORE
           # the parallel build, so a config regression fails here loudly
