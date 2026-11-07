@@ -1,3 +1,80 @@
+# v26-ksubackslashxx-nodt2w (2026-11-07): v25 verbatim MINUS the DT2W step.
+# DT2W is TEMPORARILY REMOVED, not deleted for good: the combined patch
+# (dt2w-rmx1805-combined.patch, md5 7610046f8ab75abffabd6e41d562e6e9) is
+# still embedded in v25, which is untouched on disk, so DT2W comes back
+# by re-adding the "Apply DT2W combined patch" step from v25 verbatim.
+# Everything else is v25 untouched: backslashxx KernelSU v3.3.1 hooks,
+# pstore base fix, fixdep guard, 2GB low-RAM tweaks, toolchain,
+# AnyKernel3 packing, and the pstore input (default enabled).
+# NOTE: without the DT2W patch the touchscreen driver is stock, so
+# double-tap-to-wake will not work on a v26 kernel. The original mikasa
+# module (dt2w-realme2) has nothing to enable. Re-add DT2W (v25) when
+# the wake feature is wanted again.
+#
+# v25-ksubackslashxx-dt2w (2026-11-07): v24 verbatim MINUS BakaSU, PLUS
+# backslashxx KernelSU v3.3.1 (tag v3.3.1-38, commit feeec8e, master).
+# The root solution is swapped; everything else is untouched: pstore base
+# fix, fixdep guard, 2GB low-RAM tweaks, DT2W combined patch (exact),
+# toolchain, AnyKernel3 packing, and the pstore input (default enabled).
+#
+# WHY THE SWAP NEEDS A NEW HOOKS PATCH (not just a new driver fetch):
+# backslashxx v3.3.1 is a KernelSU fork whose driver differs from BakaSU
+# in three ways that all matter here (all verified against the live
+# backslashxx/KernelSU master, tag v3.3.1-38, 2026-11-07):
+#   1. There is NO CONFIG_KSU_MANUAL_HOOK and NO CONFIG_KSU_TRACEPOINT_HOOK
+#      in its Kconfig. The manual-hook call sites are guarded by plain
+#      CONFIG_KSU. So the BakaSU patch's MANUAL_HOOK guard would compile
+#      every hook call OUT (silent no-root kernel). The new patch guards
+#      everything with CONFIG_KSU.
+#   2. The driver provides exactly four hook entry points as globals:
+#      ksu_handle_execveat, ksu_handle_faccessat, ksu_handle_stat (all in
+#      kernel/feature/sucompat.c) and ksu_handle_sys_reboot (in
+#      kernel/supercall/supercall.c), with the same signatures BakaSU had.
+#      It does NOT provide ksu_handle_post_execveat, ksu_handle_vfs_read,
+#      or ksu_handle_input_handle_event, so those calls are dropped.
+#      (ksu_handle_newfstat_ret / ksu_handle_fstat64_ret DO exist, but
+#      they are not needed: backslashxx injects its init rc via its LSM
+#      hooks, which are on by default. If the manager app cannot connect
+#      after flashing, adding those two calls to fs/stat.c is the first
+#      thing to try.)
+#   3. The hook functions are global ONLY while CONFIG_KSU_TAMPER_SYSCALL_TABLE
+#      and CONFIG_KSU_HACK_ARM64_BRANCH_LINK are both off. Either one on
+#      makes them `static __always_inline`, which would fail the link.
+#      Both default to off (n) for a built-in CONFIG_KSU=y build, and the
+#      hooks step forces them off in the defconfig and fails fast if
+#      either is y.
+# WHAT THE NEW HOOKS PATCH DOES (109 lines, generated from the pristine
+# tree at HEAD and verified to apply cleanly):
+#   - fs/exec.c: drop the old ksu_execveat_hook bool and the
+#     ksu_handle_execveat_sucompat variant; call ksu_handle_execveat
+#     directly under CONFIG_KSU. No post_execveat, no __attribute__((hot)).
+#   - drivers/input/input.c: DELETE the input hook block (no such
+#     function in backslashxx).
+#   - fs/read_write.c: DELETE the vfs_read hook block (no such function).
+#   - kernel/reboot.c: ADD the sys_reboot hook (extern + call, CONFIG_KSU).
+#   - fs/open.c and fs/stat.c: NOT TOUCHED. The pristine tree already
+#     calls ksu_handle_faccessat (open.c) and ksu_handle_stat (stat.c,
+#     in vfs_fstatat, which covers newfstatat and fstatat64) under
+#     CONFIG_KSU, and those two functions exist in backslashxx.
+#   - security/selinux/*: NOT TOUCHED. The BakaSU patch exported
+#     sel_mutex / sel_handle_status_ops / write_op / policy_rwlock /
+#     selinux_status_page because the old driver needed them. Backslashxx
+#     reaches policy_rwlock via kallsyms (weak extern + fallback) and
+#     never touches the others, so the exports are unnecessary.
+#   - defconfig: the tree already ships CONFIG_KSU=y. The step deletes
+#     any stale TRACEPOINT/MANUAL_HOOK lines and forces TAMPER_SYSCALL_TABLE
+#     and HACK_ARM64_BRANCH_LINK off, then fails fast if any of the four
+#     wrong states is present.
+# MANAGER APP: backslashxx KernelSU uses the standard KernelSU manager
+# (package me.weishu.kernelsu). The BakaSU manager app will NOT work with
+# this kernel - install the KernelSU manager from the backslashxx release
+# (or the official KernelSU manager). The SELinux enforcing module v1.0
+# (sepolicy.rule, ksud) is manager-agnostic and still applies.
+# UNTESTED: this workflow has not been run on GitHub yet. It has not been
+# flashed or booted. The DT2W patch and the pstore/low-RAM steps are
+# byte-identical to v24 (proven), but the backslashxx integration itself
+# is new and must be proven by a GitHub run + flash + `su` test.
+#
 # v24-dt2w-combined-nocache (2026-10-29): v23 verbatim
 # MINUS nothing, PLUS exactly one change: the DT2W step now embeds the
 # user's uploaded dt2w-rmx1805-combined.patch (md5 7610046f8ab75abffabd6e41d562e6e9)
@@ -195,15 +272,16 @@
 # first, so the toggle is the only CONSOLE/PMSG setting in the file.
 # PSTORE_FTRACE stays off in both modes (overhead, not needed here).
 #
-# Build the RMX1805 (ArcticFox) kernel with BakaSU integrated,
+# Build the RMX1805 (ArcticFox) kernel with backslashxx KernelSU integrated,
 # then pack it as a flashable AnyKernel3 zip.
 #
-# FULLY SELF-CONTAINED: this workflow applies the BakaSU manual-hook
-# patch itself (see "Integrate BakaSU hooks" step), fetches the BakaSU
-# driver via the official setup.sh, builds, and packs AnyKernel3.
+# FULLY SELF-CONTAINED: this workflow applies the backslashxx manual-hook
+# patch itself (see "Integrate backslashxx KernelSU hooks" step), fetches the
+# backslashxx driver via the official setup.sh (pinned v3.3.1-38), builds,
+# and packs AnyKernel3.
 # Just copy this file to .github/workflows/build-kernel.yml and push.
 
-name: Build RMX1805 Kernel (BakaSU)
+name: Build RMX1805 Kernel (KernelSU backslashxx)
 
 on:
   workflow_dispatch:
@@ -231,25 +309,11 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Integrate BakaSU hooks
+      - name: Integrate backslashxx KernelSU hooks
         run: |
-          cat > /tmp/bakasu-hooks.patch <<'PATCHEOF'
-          diff --git a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
-          index a3dd48bb..d13bba72 100644
-          --- a/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
-          +++ b/arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig
-          @@ -750,6 +750,8 @@ CONFIG_SCHED_DEBUG=y
-           CONFIG_EXT4_ASYNC_DISCARD_SUPPORT=y
-           #endif
-           
-          -# KernelSU
-          +# KernelSU (BakaSU, manual hook mode for 4.9 non-GKI)
-           CONFIG_KSU=y
-          +# CONFIG_KSU_TRACEPOINT_HOOK is not set
-          +CONFIG_KSU_MANUAL_HOOK=y
-           CONFIG_OVERLAY_FS=y
+          cat > /tmp/ksubackslashxx-hooks.patch <<'PATCHEOF'
           diff --git a/drivers/input/input.c b/drivers/input/input.c
-          index 6665c2a8..1e04d2e4 100644
+          index 6665c2a..1e04d2e 100644
           --- a/drivers/input/input.c
           +++ b/drivers/input/input.c
           @@ -377,20 +377,11 @@ static int input_get_disposition(struct input_dev *dev,
@@ -274,30 +338,22 @@ jobs:
            		add_input_randomness(type, code, value);
            
           diff --git a/fs/exec.c b/fs/exec.c
-          index 12fbb811..dbeafb6b 100644
+          index 12fbb81..26318c9 100644
           --- a/fs/exec.c
           +++ b/fs/exec.c
-          @@ -1815,12 +1815,13 @@ static int oppo_check_execveat_perm(struct file* filp)
-            * sys_execve() executes a new program.
+          @@ -1816,11 +1816,8 @@ out_ret:
             */
            
-          -#ifdef CONFIG_KSU
+           #ifdef CONFIG_KSU
           -extern bool ksu_execveat_hook __read_mostly;
-          -extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
-          -			void *envp, int *flags);
+           extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+           			void *envp, int *flags);
           -extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
           -				 void *argv, void *envp, int *flags);
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +__attribute__((hot))
-          +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
-          +				void *argv, void *envp, int *flags);
-          +__attribute__((hot))
-          +extern int ksu_handle_post_execveat(int *fd, struct filename **filename_ptr,
-          +				void *argv, void *envp, int *flags, int *retval);
            #endif
            
            static int do_execveat_common(int fd, struct filename *filename,
-          @@ -1834,12 +1835,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+          @@ -1834,12 +1831,9 @@ static int do_execveat_common(int fd, struct filename *filename,
            	struct files_struct *displaced;
            	int retval;
            
@@ -307,56 +363,14 @@ jobs:
           -	else
           -		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
           -	#endif
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +#ifdef CONFIG_KSU
           +	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
           +#endif
            
            	if (IS_ERR(filename))
            		return PTR_ERR(filename);
-          @@ -1982,6 +1980,9 @@ static int do_execveat_common(int fd, struct filename *filename,
-           	putname(filename);
-           	if (displaced)
-           		put_files_struct(displaced);
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
-          +#endif
-           	return retval;
-           
-           out:
-          @@ -2003,6 +2004,9 @@ static int do_execveat_common(int fd, struct filename *filename,
-           		reset_files_struct(displaced);
-           out_ret:
-           	putname(filename);
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
-          +#endif
-           	return retval;
-           }
-           
-          diff --git a/fs/open.c b/fs/open.c
-          index 9a87e001..7eda1c1a 100644
-          --- a/fs/open.c
-          +++ b/fs/open.c
-          @@ -355,7 +355,7 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
-           	return error;
-           }
-           
-          -#ifdef CONFIG_KSU
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-           extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
-           			 int *flags);
-           #endif
-          @@ -375,7 +375,7 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
-           	int res;
-           	unsigned int lookup_flags = LOOKUP_FOLLOW;
-           
-          -	#ifdef CONFIG_KSU
-          +	#ifdef CONFIG_KSU_MANUAL_HOOK
-           	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-           	#endif
-           
           diff --git a/fs/read_write.c b/fs/read_write.c
-          index 93a33c07..90123126 100644
+          index 93a33c0..9012312 100644
           --- a/fs/read_write.c
           +++ b/fs/read_write.c
           @@ -456,21 +456,10 @@ ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
@@ -381,92 +395,8 @@ jobs:
            	if (!(file->f_mode & FMODE_READ))
            		return -EBADF;
            	if (!(file->f_mode & FMODE_CAN_READ))
-          diff --git a/fs/stat.c b/fs/stat.c
-          index ce24d2a1..2d9a81dd 100644
-          --- a/fs/stat.c
-          +++ b/fs/stat.c
-          @@ -87,10 +87,6 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
-           }
-           EXPORT_SYMBOL(vfs_fstat);
-           
-          -#ifdef CONFIG_KSU
-          -extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
-          -#endif
-          -
-           int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
-           		int flag)
-           {
-          @@ -98,10 +94,6 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
-           	int error = -EINVAL;
-           	unsigned int lookup_flags = 0;
-           
-          -	#ifdef CONFIG_KSU
-          -	ksu_handle_stat(&dfd, &filename, &flag);
-          -	#endif
-          -
-           	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
-           		      AT_EMPTY_PATH)) != 0)
-           		goto out;
-          @@ -295,6 +287,17 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
-           	return cp_new_stat(&stat, statbuf);
-           }
-           
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +__attribute__((hot))
-          +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
-          +				int *flags);
-          +
-          +extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
-          +#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
-          +extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr); // optional
-          +#endif
-          +#endif
-          +
-           #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
-           SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
-           		struct stat __user *, statbuf, int, flag)
-          @@ -302,6 +305,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
-           	struct kstat stat;
-           	int error;
-           
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +	ksu_handle_stat(&dfd, &filename, &flag);
-          +#endif
-           	error = vfs_fstatat(dfd, filename, &stat, flag);
-           	if (error)
-           		return error;
-          @@ -317,6 +323,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
-           	if (!error)
-           		error = cp_new_stat(&stat, statbuf);
-           
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
-          +	ksu_handle_newfstat_ret(&fd, &statbuf);
-          +#endif
-           	return error;
-           }
-           
-          @@ -435,6 +444,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
-           	if (!error)
-           		error = cp_new_stat64(&stat, statbuf);
-           
-          +#ifdef CONFIG_KSU_MANUAL_HOOK // for 32-bit
-          +	ksu_handle_fstat64_ret(&fd, &statbuf);
-          +#endif
-           	return error;
-           }
-           
-          @@ -444,6 +456,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
-           	struct kstat stat;
-           	int error;
-           
-          +#ifdef CONFIG_KSU_MANUAL_HOOK // 32-bit su
-          +	ksu_handle_stat(&dfd, &filename, &flag);
-          +#endif
-           	error = vfs_fstatat(dfd, filename, &stat, flag);
-           	if (error)
-           		return error;
           diff --git a/kernel/reboot.c b/kernel/reboot.c
-          index 2946ed1d..ac2bcff5 100644
+          index 2946ed1..8fde32b 100644
           --- a/kernel/reboot.c
           +++ b/kernel/reboot.c
           @@ -277,6 +277,11 @@ static DEFINE_MUTEX(reboot_mutex);
@@ -474,7 +404,7 @@ jobs:
             * reboot doesn't sync: do that yourself before calling this.
             */
           +
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +#ifdef CONFIG_KSU
           +extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
           +#endif
           +
@@ -485,123 +415,33 @@ jobs:
            	char buffer[256];
            	int ret = 0;
            
-          +#ifdef CONFIG_KSU_MANUAL_HOOK
+          +#ifdef CONFIG_KSU
           +	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
           +#endif
            	/* We only trust the superuser with rebooting the system. */
            	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
            		return -EPERM;
-          diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-          index 20c27ff8..167bda31 100644
-          --- a/security/selinux/hooks.c
-          +++ b/security/selinux/hooks.c
-          @@ -1096,7 +1096,6 @@ static int selinux_parse_opts_str(char *options,
-           	if (!opts->mnt_opts_flags)
-           		goto out_err;
-           
-          -
-           	if (fscontext) {
-           		opts->mnt_opts[num_mnt_opts] = fscontext;
-           		opts->mnt_opts_flags[num_mnt_opts++] = FSCONTEXT_MNT;
-          @@ -2283,33 +2282,12 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
-           	int nosuid = !mnt_may_suid(bprm->file->f_path.mnt);
-           	int rc;
-           
-          -	#ifdef CONFIG_KSU
-          -    static u32 ksu_sid;
-          -    char *secdata;
-          -    int error;
-          -    u32 seclen;
-          -	#endif
-          -
-           	if (!nnp && !nosuid)
-           		return 0; /* neither NNP nor nosuid */
-           
-           	if (new_tsec->sid == old_tsec->sid)
-           		return 0; /* No change in credentials */
-           
-          -	#ifdef CONFIG_KSU
-          -	if (!ksu_sid) {
-          -        security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksu_sid);
-          -	}
-          -	error = security_secid_to_secctx(old_tsec->sid, &secdata, &seclen);
-          -	if (!error) {
-          -        rc = strcmp("u:r:init:s0",secdata);
-          -        security_release_secctx(secdata, seclen);
-          -        if (rc == 0 && new_tsec->sid == ksu_sid) {
-          -			return 0;
-          -        }
-          -    }
-          -	#endif
-          -
-           	/*
-           	 * The only transitions we permit under NNP or nosuid
-           	 * are transitions to bounded SIDs, i.e. SIDs that are
-          diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-          index 5c731b5f..1548fcee 100644
-          --- a/security/selinux/selinuxfs.c
-          +++ b/security/selinux/selinuxfs.c
-          @@ -60,7 +60,7 @@ static int __init checkreqprot_setup(char *str)
-           }
-           __setup("checkreqprot=", checkreqprot_setup);
-           
-          -static DEFINE_MUTEX(sel_mutex);
-          +DEFINE_MUTEX(sel_mutex);
-           
-           /* global data for booleans */
-           static struct dentry *bool_dir;
-          @@ -268,7 +268,7 @@ static int sel_mmap_handle_status(struct file *filp,
-           			       size, vma->vm_page_prot);
-           }
-           
-          -static const struct file_operations sel_handle_status_ops = {
-          +const struct file_operations sel_handle_status_ops = {
-           	.open		= sel_open_handle_status,
-           	.read		= sel_read_handle_status,
-           	.mmap		= sel_mmap_handle_status,
-          @@ -730,7 +730,7 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size);
-           static ssize_t sel_write_user(struct file *file, char *buf, size_t size);
-           static ssize_t sel_write_member(struct file *file, char *buf, size_t size);
-           
-          -static ssize_t (*write_op[])(struct file *, char *, size_t) = {
-          +ssize_t (*write_op[])(struct file *, char *, size_t) = {
-           	[SEL_ACCESS] = sel_write_access,
-           	[SEL_CREATE] = sel_write_create,
-           	[SEL_RELABEL] = sel_write_relabel,
-          diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
-          index 9c657f0e..8fea35c5 100644
-          --- a/security/selinux/ss/services.c
-          +++ b/security/selinux/ss/services.c
-          @@ -74,7 +74,7 @@ int selinux_policycap_netpeer;
-           int selinux_policycap_openperm;
-           int selinux_policycap_alwaysnetwork;
-           
-          -static DEFINE_RWLOCK(policy_rwlock);
-          +DEFINE_RWLOCK(policy_rwlock);
-           
-           static struct sidtab sidtab;
-           struct policydb policydb;
-          diff --git a/security/selinux/ss/status.c b/security/selinux/ss/status.c
-          index feb23857..5cdd7c42 100644
-          --- a/security/selinux/ss/status.c
-          +++ b/security/selinux/ss/status.c
-          @@ -35,8 +35,8 @@
-            * In most cases, application shall confirm the kernel status is not
-            * changed without any system call invocations.
-            */
-          -static struct page *selinux_status_page;
-          -static DEFINE_MUTEX(selinux_status_lock);
-          +struct page *selinux_status_page;
-          +DEFINE_MUTEX(selinux_status_lock);
-           
-           /*
-            * selinux_kernel_status_page
-          
           PATCHEOF
-          git apply --check /tmp/bakasu-hooks.patch
-          git apply /tmp/bakasu-hooks.patch
+          git apply --check /tmp/ksubackslashxx-hooks.patch
+          git apply /tmp/ksubackslashxx-hooks.patch
           echo "=== applied changes ==="
           git diff --stat | tail -12
+          # --- defconfig: backslashxx needs CONFIG_KSU=y and nothing else.
+          # The tree already ships CONFIG_KSU=y. Delete any stale
+          # TRACEPOINT/MANUAL_HOOK lines (left by an earlier BakaSU run),
+          # and force the two options that would make the hook functions
+          # static (and therefore uncallable from the kernel source) OFF.
+          DEFCONFIG="arch/arm64/configs/RMX1805_ArcticFox-KSU_defconfig"
+          sed -i '/^# CONFIG_KSU_TRACEPOINT_HOOK is not set/d; /^CONFIG_KSU_TRACEPOINT_HOOK=/d; /^# CONFIG_KSU_MANUAL_HOOK is not set/d; /^CONFIG_KSU_MANUAL_HOOK=/d' "$DEFCONFIG"
+          sed -i '/^CONFIG_KSU_TAMPER_SYSCALL_TABLE=/d; /^# CONFIG_KSU_TAMPER_SYSCALL_TABLE is not set/d' "$DEFCONFIG"
+          sed -i '/^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=/d; /^# CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set/d' "$DEFCONFIG"
+          printf '# CONFIG_KSU_TAMPER_SYSCALL_TABLE is not set\n# CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set\n' >> "$DEFCONFIG"
+          grep -q "^CONFIG_KSU=y$" "$DEFCONFIG" || { echo "ERROR: CONFIG_KSU=y missing from defconfig" >&2; exit 1; }
+          if grep -q "^CONFIG_KSU_MANUAL_HOOK=y$" "$DEFCONFIG"; then echo "ERROR: stale CONFIG_KSU_MANUAL_HOOK still set" >&2; exit 1; fi
+          if grep -q "^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$" "$DEFCONFIG"; then echo "ERROR: TAMPER_SYSCALL_TABLE is y - hook fns would be static" >&2; exit 1; fi
+          if grep -q "^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y$" "$DEFCONFIG"; then echo "ERROR: HACK_ARM64_BRANCH_LINK is y - hook fns would be static" >&2; exit 1; fi
+          echo "=== defconfig KSU lines ==="
+          grep "CONFIG_KSU" "$DEFCONFIG"
 
       - name: Apply 2GB low-RAM tweaks
         run: |
@@ -784,10 +624,20 @@ jobs:
           if [ -z "$PSTORE_CHOICE" ]; then PSTORE_CHOICE="enabled"; fi
           bash /tmp/pstore-fix-v20.sh "$PSTORE_CHOICE"
 
-      - name: Fetch BakaSU driver (official setup.sh)
+      - name: Fetch backslashxx KernelSU driver (official setup.sh, pinned v3.3.1-38)
         run: |
-          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s --
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s v3.3.1-38
           ls -la drivers/kernelsu
+          test -L drivers/kernelsu || { echo "ERROR: drivers/kernelsu symlink missing after setup.sh" >&2; exit 1; }
+          test -f drivers/kernelsu/feature/sucompat.c || { echo "ERROR: driver source not linked" >&2; exit 1; }
+          echo "=== hook functions the kernel source calls (must all be present) ==="
+          grep -q "ksu_handle_execveat" drivers/kernelsu/feature/sucompat.c || { echo "ERROR: ksu_handle_execveat missing from driver" >&2; exit 1; }
+          grep -q "ksu_handle_faccessat" drivers/kernelsu/feature/sucompat.c || { echo "ERROR: ksu_handle_faccessat missing from driver" >&2; exit 1; }
+          grep -q "ksu_handle_stat" drivers/kernelsu/feature/sucompat.c || { echo "ERROR: ksu_handle_stat missing from driver" >&2; exit 1; }
+          grep -q "ksu_handle_sys_reboot" drivers/kernelsu/supercall/supercall.c || { echo "ERROR: ksu_handle_sys_reboot missing from driver" >&2; exit 1; }
+          echo "=== driver must NOT have a CONFIG_KSU_MANUAL_HOOK option (guard is CONFIG_KSU) ==="
+          if grep -q "KSU_MANUAL_HOOK" drivers/kernelsu/Kconfig; then echo "ERROR: driver has KSU_MANUAL_HOOK - the hooks patch guard is wrong" >&2; exit 1; fi
+          echo "backslashxx KernelSU v3.3.1-38 fetched and verified"
 
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
         run: |
@@ -800,94 +650,6 @@ jobs:
           tar -xf gcc.tar.xz
           ./gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc --version
 
-      - name: Apply DT2W combined patch (ILI9881 + regulator, exact)
-        run: |
-          set -euo pipefail
-          cat > /tmp/dt2w_combined.patch <<'PATCHEOF'
-          diff --git a/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi b/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
-          index be20e08..8caf238 100644
-          --- a/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
-          +++ b/arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi
-          @@ -1190,4 +1190,5 @@
-            	enable-active-high;
-           	regulator-boot-on;
-          +	regulator-always-on;
-           	status = "ok";
-            };
-          diff --git a/drivers/input/touchscreen/ili9881_18663/core/finger_report.c b/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
-          index 91d6056..fa98e10 100644
-          --- a/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
-          +++ b/drivers/input/touchscreen/ili9881_18663/core/finger_report.c
-          @@ -596,7 +596,7 @@ static int finger_report_ver_5_0(void)
-           		if(res)
-           			{
-          -			input_report_key(core_fr->input_device, KEY_F4, 1);
-          +			input_report_key(core_fr->input_device, KEY_WAKEUP, 1);
-           			input_sync(core_fr->input_device);
-          -			input_report_key(core_fr->input_device, KEY_F4, 0);
-          +			input_report_key(core_fr->input_device, KEY_WAKEUP, 0);
-           			input_sync(core_fr->input_device);
-           			}
-          @@ -1000,4 +1000,5 @@ void core_fr_input_set_param(struct input_dev *input_device)
-           	set_bit(BTN_TOUCH, core_fr->input_device->keybit);
-           	set_bit(BTN_TOOL_FINGER, core_fr->input_device->keybit);
-          +	set_bit(KEY_WAKEUP, core_fr->input_device->keybit);
-           	set_bit(INPUT_PROP_DIRECT, core_fr->input_device->propbit);
-           
-          diff --git a/drivers/input/touchscreen/ili9881_18663/platform.c b/drivers/input/touchscreen/ili9881_18663/platform.c
-          index 92effb1..b2aa0f3 100644
-          --- a/drivers/input/touchscreen/ili9881_18663/platform.c
-          +++ b/drivers/input/touchscreen/ili9881_18663/platform.c
-          @@ -418,5 +418,5 @@ static int ilitek_platform_notifier_fb(struct notifier_block *self, unsigned lon
-           	 *  FB_EARLY_EVENT_BLANK(0x10): A hardware display blank early change occurred.
-           	 */
-          -	if (evdata && evdata->data &&  event == FB_EARLY_EVENT_BLANK) {
-          +	if (evdata && evdata->data && (event == FB_EARLY_EVENT_BLANK || event == FB_EVENT_BLANK)) {
-           		blank = evdata->data;
-           
-          @@ -430,5 +430,5 @@ static int ilitek_platform_notifier_fb(struct notifier_block *self, unsigned lon
-           
-           			/*if (!core_firmware->isUpgrading) */{
-          -				//if (!core_config->isEnableGesture)
-          +				if (!core_config->isEnableGesture)
-           					ilitek_platform_disable_irq();
-           
-          @@ -708,4 +708,5 @@ void ilitek_esd_gesture_reset(void)
-           	}
-           	core_fr->isEnableFR = true;
-          +	enable_irq_wake(ipd->isr_gpio);
-           	ipio_info("esd gesture reset Done\n");
-           
-          diff --git a/drivers/input/touchscreen/ili9881_18663/userspace.c b/drivers/input/touchscreen/ili9881_18663/userspace.c
-          index 20fffda..c947d37 100644
-          --- a/drivers/input/touchscreen/ili9881_18663/userspace.c
-          +++ b/drivers/input/touchscreen/ili9881_18663/userspace.c
-          @@ -1412,7 +1412,9 @@ static ssize_t ilitek_proc_gesture_write(struct file *filp, const char *buff, si
-           		ipio_info("enable gesture mode\n");
-           		core_config->isEnableGesture = true;
-          +		g_gesture = 1;
-           	} else if (strcmp(cmd, "off") == 0) {
-           		ipio_info("disable gesture mode\n");
-           		core_config->isEnableGesture = false;
-          +		g_gesture = 0;
-           	} else
-           		ipio_err("Unknown command\n");
-          PATCHEOF
-          echo "DT2W combined patch md5 (embedded): 7610046f8ab75abffabd6e41d562e6e9"
-          md5sum /tmp/dt2w_combined.patch
-          patch -p1 < /tmp/dt2w_combined.patch
-          echo "=== DT2W combined marker checks (fail fast, before build) ==="
-          grep -q "KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP not in finger_report.c" >&2; exit 1; }
-          grep -q "set_bit(KEY_WAKEUP" drivers/input/touchscreen/ili9881_18663/core/finger_report.c || { echo "ERROR: KEY_WAKEUP keybit not set" >&2; exit 1; }
-          if grep -q "KEY_F4" drivers/input/touchscreen/ili9881_18663/core/finger_report.c; then echo "ERROR: KEY_F4 still present in finger_report.c" >&2; exit 1; fi
-          grep -q "event == FB_EVENT_BLANK" drivers/input/touchscreen/ili9881_18663/platform.c || { echo "ERROR: FB_EVENT_BLANK handling not in platform.c" >&2; exit 1; }
-          grep -q "enable_irq_wake(ipd->isr_gpio)" drivers/input/touchscreen/ili9881_18663/platform.c || { echo "ERROR: ESD enable_irq_wake not in platform.c" >&2; exit 1; }
-          grep -q "g_gesture = 1" drivers/input/touchscreen/ili9881_18663/userspace.c || { echo "ERROR: g_gesture = 1 not in userspace.c" >&2; exit 1; }
-          grep -q "g_gesture = 0" drivers/input/touchscreen/ili9881_18663/userspace.c || { echo "ERROR: g_gesture = 0 not in userspace.c" >&2; exit 1; }
-          grep -q "regulator-always-on" arch/arm64/boot/dts/qcom/msm8953-mtp.dtsi || { echo "ERROR: regulator-always-on not in msm8953-mtp.dtsi" >&2; exit 1; }
-          if grep -q "DT2W default-on" drivers/input/touchscreen/ili9881_18663/core/config.c; then echo "ERROR: config.c carries a default-on change - this must be the exact combined patch only" >&2; exit 1; fi
-          grep -q "isEnableGesture = false" drivers/input/touchscreen/ili9881_18663/core/config.c || { echo "ERROR: config.c default changed - this must be the exact combined patch only" >&2; exit 1; }
-          echo "DT2W combined patch applied and verified"
       - name: Build kernel
         run: |
           export ARCH=arm64
@@ -964,7 +726,7 @@ jobs:
           ### AnyKernel setup
           # global properties
           properties() { '
-          kernel.string=ArcticFox BakaSU Kernel for RMX1805/RMX1809/RMX1811
+          kernel.string=ArcticFox KernelSU (backslashxx) Kernel for RMX1805/RMX1809/RMX1811
           do.devicecheck=1
           do.modules=1
           do.systemless=1
@@ -1012,7 +774,7 @@ jobs:
       - name: Upload AnyKernel3 (directly flashable)
         uses: actions/upload-artifact@v4
         with:
-          name: RMX1805-ArcticFox-BakaSU-Kernel-${{ github.sha }}
+          name: RMX1805-ArcticFox-KSU-backslashxx-Kernel-${{ github.sha }}
           # Upload the payload directly (not a pre-made zip): GitHub zips the
           # artifact once on download, so the downloaded file IS the flashable
           # AnyKernel3 zip. No more zip-inside-zip.
