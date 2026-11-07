@@ -1,3 +1,18 @@
+# v28-ksubackslashxx-nodt2w-enforcing-noak3 (2026-11-08): v27 verbatim MINUS the AK3 helper module.
+# The user asked to make sure NO ak3 module is installed in KernelSU.
+# The ak3-helper module is created by AnyKernel3 ONLY when do.modules=1 AND
+# do.systemless=1, and it carries the built .ko files (wlan.ko etc).
+# This version sets do.modules=0 and do.systemless=0, and removes the
+# module-bundling block from the Pack step, so the flashed zip installs the
+# kernel only and creates NO ak3-helper module in the KernelSU module list.
+# WiFi does NOT need the helper: the v28 ROM already ships a compatible
+# wlan.ko (proven 2026-11-07 -- WiFi works fine with the helper disabled).
+# Everything else is v27 unchanged: backslashxx KernelSU v3.3.1-38,
+# enforcing cmdline patch (patch_cmdline), pstore base fix, low-RAM tweaks,
+# DT2W still temporarily removed. The old ak3-helper module (from a v26/v27
+# flash) removes itself at boot when it detects a different kernel, so
+# flashing v28 cleans it up; it can also be removed by hand in the manager.
+#
 # v27-ksubackslashxx-nodt2w-enforcing (2026-11-07): v26 verbatim PLUS enforcing.
 # The user asked to BUILD IT ENFORCING (not via the module flip). This version
 # makes the flashed boot image boot Enforcing natively: the AnyKernel3 script
@@ -744,8 +759,8 @@ jobs:
           properties() { '
           kernel.string=ArcticFox KernelSU (backslashxx) Enforcing Kernel for RMX1805/RMX1809/RMX1811
           do.devicecheck=1
-          do.modules=1
-          do.systemless=1
+          do.modules=0
+          do.systemless=0
           do.cleanup=1
           do.cleanuponabort=0
           device.name1=RMX1805
@@ -775,18 +790,8 @@ jobs:
           ## end boot install
           AK3EOF
           cd ..
-          # bundle kernel modules (stripped) for do.modules=1
-          mkdir -p anykernel3/modules/system/lib/modules
-          rm -f anykernel3/modules/system/lib/modules/placeholder
-          for ko in $(find drivers net fs -name "*.ko"); do
-            cp "$ko" anykernel3/modules/system/lib/modules/
-          done
-          STRIP=$GITHUB_WORKSPACE/toolchain/gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-strip
-          "$STRIP" --strip-unneeded anykernel3/modules/system/lib/modules/*.ko
-          ls anykernel3/modules/system/lib/modules/
           cd anykernel3
           ls -lh Image.gz-dtb anykernel.sh
-          ls modules/system/lib/modules/ | grep -E "wlan.ko"
           test -f Image.gz-dtb && test -f anykernel.sh && echo "AnyKernel3 payload verified"
           cd ..
 
