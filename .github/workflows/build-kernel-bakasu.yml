@@ -1,3 +1,19 @@
+# v27-ksubackslashxx-nodt2w-enforcing (2026-11-07): v26 verbatim PLUS enforcing.
+# The user asked to BUILD IT ENFORCING (not via the module flip). This version
+# makes the flashed boot image boot Enforcing natively: the AnyKernel3 script
+# now calls patch_cmdline to replace androidboot.selinux=permissive with
+# androidboot.selinux=enforcing in the boot image cmdline at flash time
+# (after split_boot, before flash_boot). Verified against AK3 10a3586
+# tools/ak3-core.sh: patch_cmdline <name> <replacement> replaces the matching
+# token if present, else appends the replacement -- so it enforces whether the
+# old cmdline had permissive or not. DT2W is still TEMPORARILY REMOVED (v26);
+# the DT2W patch is still embedded in v25. KernelSU is backslashxx v3.3.1-38,
+# pstore base fix, low-RAM tweaks, toolchain and AnyKernel3 packing unchanged.
+# NOTE: the SELinux module v1.0 is STILL NEEDED for its 92 sepolicy rules
+# (the ROM only bakes in 36). v27 only changes the BOOT MODE to enforcing;
+# without the module's rules, modem/WiFi/data may break in enforcing.
+# The module's service.sh flip becomes a no-op (already enforcing).
+#
 # v26-ksubackslashxx-nodt2w (2026-11-07): v25 verbatim MINUS the DT2W step.
 # DT2W is TEMPORARILY REMOVED, not deleted for good: the combined patch
 # (dt2w-rmx1805-combined.patch, md5 7610046f8ab75abffabd6e41d562e6e9) is
@@ -726,7 +742,7 @@ jobs:
           ### AnyKernel setup
           # global properties
           properties() { '
-          kernel.string=ArcticFox KernelSU (backslashxx) Kernel for RMX1805/RMX1809/RMX1811
+          kernel.string=ArcticFox KernelSU (backslashxx) Enforcing Kernel for RMX1805/RMX1809/RMX1811
           do.devicecheck=1
           do.modules=1
           do.systemless=1
@@ -749,6 +765,9 @@ jobs:
 
           # boot install
           split_boot;
+
+          # enforce SELinux: replace permissive token with enforcing (v27)
+          patch_cmdline androidboot.selinux=permissive androidboot.selinux=enforcing;
 
           # flash boot and dtbo (dtbo is skipped automatically if not bundled)
           flash_boot;
