@@ -1,3 +1,34 @@
+# v35-ksunext-susfs230 (2026-11-08): v34 verbatim MINUS a ksud that never
+# starts, PLUS a 3-line fix to the tree's own SELinux bypass.
+# v34 BUILT on GitHub, BOOTED fine, manager detects KernelSU-Next legacy
+# v2 + SUSFS -- but the module section is dead (grey toggle, module stuck
+# on "updated", reboots do not help): ksud never starts at boot.
+# dmesg proof (user's output, 2026-11-08 14:34 SGT): `ps -A | grep ksud`
+# empty, `getprop init.svc.ksud` empty, and THREE denials at 14.7s /
+# 17.9s / 35.4s (the three KERNEL_SU_RC exec triggers: post-fs-data,
+# nonencrypted, boot-completed):
+#   type=1401 audit: op=security_bounded_transition seresult=denied
+#   oldcontext=u:r:init:s0 newcontext=u:r:ksu:s0
+# So the init.rc proxy WORKED (the triggers registered -- this is NOT the
+# one-shot first-stage theory) and init TRIED to exec /data/adb/ksud three
+# times; SELinux denied the init -> ksu domain transition each time.
+# Root cause (tree bug, BakaSU-era leftover, in PRISTINE HEAD -- not the
+# driver, not the SUSFS patch): security/selinux/hooks.c check_nnp_nosuid
+# has a #ifdef CONFIG_KSU bypass that is supposed to let init exec the KSU
+# daemon, but it resolves the SID for "u:r:su:s0" into the variable named
+# ksu_sid. The KSU-Next daemon runs as u:r:ksu:s0 (sid 64 on this phone),
+# so the bypass never matches and the code falls through to
+# security_bounded_transition, which only walks type->bounds -- no allow
+# rule can fix it (the driver's allow init ksu ALL ALL is irrelevant
+# there). The driver's own is_ksu_transition (selinux.c:58) has the RIGHT
+# context but has NO callers. Fix (this version, new step after the SUSFS
+# patch step): apply ksud-bounded-fix.patch (30 lines, md5 386c2cf4...) --
+# resolve "u:r:ksu:s0" into ksu_sid, keep "u:r:su:s0" as a fallback in
+# su_sid, allow the transition if the new sid matches either. Proven to
+# compile locally (security/selinux/hooks.o, same GCC 9.4, exit 0) and the
+# patch applies clean to a fresh pristine HEAD. The combined SUSFS patch
+# is UNCHANGED from v33/v34 (md5 d5c8bd98...).
+#
 # v34-ksunext-susfs230 (2026-11-08): v33 verbatim MINUS a link failure,
 # PLUS one include line in the fetched driver.
 # v33's GitHub run FAILED at 04:55 UTC (12:55 SGT) at the FINAL LINK
@@ -4616,6 +4647,53 @@ jobs:
           if grep -q "^CONFIG_KSU_SUSFS_SUS_MEMFD=y$" "$DEFCONFIG"; then echo "ERROR: SUS_MEMFD must stay off" >&2; exit 1; fi
           echo "=== defconfig KSU/SUSFS lines ==="
           grep "CONFIG_KSU" "$DEFCONFIG"
+
+      - name: Fix init->ksu bounded transition (hooks.c su SID -> ksu SID)
+        run: |
+          # v35: the tree's check_nnp_nosuid KSU bypass resolves "u:r:su:s0"
+          # (BakaSU-era) into ksu_sid, so init -> u:r:ksu:s0 is denied by
+          # security_bounded_transition and ksud never starts (v34 dmesg:
+          # 3x op=security_bounded_transition denied init -> ksu). Resolve
+          # the ksu SID, keep su as a fallback, allow either.
+          grep -q 'security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksu_sid);' security/selinux/hooks.c || { echo "ERROR: expected hooks.c su-SID line not found (tree changed?)" >&2; exit 1; }
+          cat > /tmp/ksud-bounded-fix.patch <<'KSUDBOUNDEDEOF'
+          diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+          index 20c27ff8..703a36c0 100644
+          --- a/security/selinux/hooks.c
+          +++ b/security/selinux/hooks.c
+          @@ -2284,7 +2284,7 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
+           	int rc;
+           
+           	#ifdef CONFIG_KSU
+          -    static u32 ksu_sid;
+          +    static u32 ksu_sid, su_sid;
+               char *secdata;
+               int error;
+               u32 seclen;
+          @@ -2298,13 +2298,14 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
+           
+           	#ifdef CONFIG_KSU
+           	if (!ksu_sid) {
+          -        security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &ksu_sid);
+          +        security_secctx_to_secid("u:r:ksu:s0", strlen("u:r:ksu:s0"), &ksu_sid);
+          +        security_secctx_to_secid("u:r:su:s0", strlen("u:r:su:s0"), &su_sid);
+           	}
+           	error = security_secid_to_secctx(old_tsec->sid, &secdata, &seclen);
+           	if (!error) {
+                   rc = strcmp("u:r:init:s0",secdata);
+                   security_release_secctx(secdata, seclen);
+          -        if (rc == 0 && new_tsec->sid == ksu_sid) {
+          +        if (rc == 0 && (new_tsec->sid == ksu_sid || new_tsec->sid == su_sid)) {
+           			return 0;
+                   }
+               }
+          KSUDBOUNDEDEOF
+          git apply --check /tmp/ksud-bounded-fix.patch || { echo "ERROR: ksud-bounded-fix.patch does not apply" >&2; exit 1; }
+          git apply /tmp/ksud-bounded-fix.patch
+          grep -q 'security_secctx_to_secid("u:r:ksu:s0", strlen("u:r:ksu:s0"), &ksu_sid);' security/selinux/hooks.c || { echo "ERROR: ksu-SID line did not land in hooks.c" >&2; exit 1; }
+          grep -q 'new_tsec->sid == ksu_sid || new_tsec->sid == su_sid' security/selinux/hooks.c || { echo "ERROR: bypass condition did not land in hooks.c" >&2; exit 1; }
+          echo "=== hooks.c KSU bypass after fix ==="
+          grep -n 'ksu_sid' security/selinux/hooks.c | head -8
 
       - name: Apply 2GB low-RAM tweaks
         run: |
