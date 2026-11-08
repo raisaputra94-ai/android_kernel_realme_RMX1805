@@ -1,3 +1,22 @@
+# kernel-v37-bakasu-susfs230-fix (2026-11-08): v36 + susfs_init() fix.
+# v36 DID NOT BOOT (user: dropped to EDL). Root cause, proven against the
+# BakaSU driver source: BakaSU's core/init.c ksu_hook_init() is an #elif
+# chain -- TRACEPOINT_HOOK, then MANUAL_HOOK, then SUSFS. Under
+# MANUAL_HOOK the SUSFS branch (which calls susfs_init()) is never taken,
+# so susfs_init() NEVER runs. susfs_init() is the ONLY place that runs
+# INIT_WORK(&susfs_extra_works). BakaSU's setuid_hook.c (CONFIG_KSU_SUSFS)
+# calls schedule_work(&susfs_extra_works) when zygote spawns an app
+# (handle_zygote_next_setresuid -> do_susfs_work). Scheduling an
+# uninitialized (zeroed) work_struct corrupts the workqueue -> kernel
+# panic at first app spawn -> bootloop / EDL. This also explains why v36
+# showed no SUSFS version in dmesg (susfs_init() prints it) while v35
+# (KSU-Next, which calls susfs_init()) showed it after the KernelSU print.
+# FIX (this version): patch KernelSU/kernel/core/init.c so the MANUAL_HOOK
+# branch also calls susfs_init() when CONFIG_KSU_SUSFS is set. That is the
+# only change vs v36; everything else (patches, Kconfig fix,
+# ksud_integration fix, defconfig, pstore, low-RAM, enforcing, AK3) is
+# identical. Also adds a SUSFS version print to the build step (user ask).
+#
 # kernel-v36-bakasu-susfs230 (2026-11-08): v35 MINUS sidex15 KernelSU-Next,
 # PLUS BakaSU (official Baka-SU/BakaSU main) with SUSFS 2.3.0 KEPT.
 # The user asked to switch back to BakaSU (PIF/Zygisk worked on it; on
@@ -74,9 +93,12 @@
 # (327M) + arch/arm64/boot/Image.gz-dtb (18M), 0 undefined references,
 # 0 errors. .config carries KSU=y, MANUAL_HOOK=y, SUSFS=y, SUS_KSTAT=y,
 # PSTORE=y/CONSOLE=y/PMSG=y. `nm vmlinux` shows ksu_handle_sys_reboot.
-# UNTESTED: not run on GitHub, not flashed. After flashing, install the
-# BakaSU manager; PIF/Zygisk are expected to work as on v24/v26 (BakaSU),
-# and SUSFS is driven by sidex15's susfs4ksu-module (same as v35).
+# v36 GITHUB RUN SUCCEEDED (artifact 17.9MB) but the kernel DID NOT BOOT
+# (EDL) -- see root cause above. v37 is the fix for that; UNTESTED on
+# GitHub and on device. After flashing, install the BakaSU manager; PIF/
+# Zygisk are expected to work as on v24/v26 (BakaSU), and SUSFS is driven
+# by sidex15's susfs4ksu-module (same as v35). Confirm in dmesg:
+# "susfs is initialized! version: v2.3.0" right after the KernelSU print.
 # AFTER FLASHING: re-check PIF sensitive props + Play Integrity verdicts
 # (the KSU-Next regression), and confirm ksud stages + Zygisk injection.
 #
@@ -4765,6 +4787,24 @@ jobs:
           print('ksud_integration.c: SUSFS branch now requires !MANUAL_HOOK')
           PYEOF
           grep -q "#elif defined(CONFIG_KSU_SUSFS) && !defined(CONFIG_KSU_MANUAL_HOOK)" KernelSU/kernel/runtime/ksud_integration.c || { echo "ERROR: ksud_integration fix missing" >&2; exit 1; }
+          # --- init.c fix (v37 root cause): call susfs_init() under MANUAL_HOOK ---
+          # BakaSU core/init.c ksu_hook_init() is an #elif chain: MANUAL_HOOK
+          # wins over SUSFS, so susfs_init() never runs. susfs_init() is the
+          # only place that INIT_WORKs susfs_extra_works; setuid_hook.c
+          # schedule_work()s it when zygote spawns an app. Uninitialized
+          # work_struct -> panic at first app spawn -> bootloop/EDL.
+          # Insert the call into the MANUAL_HOOK branch when SUSFS is set.
+          python3 - <<'PYEOF'
+          p = 'KernelSU/kernel/core/init.c'
+          t = open(p).read()
+          old = '    ksu_lsm_hook_built_in_init();\n#endif\n#elif defined(CONFIG_KSU_SUSFS)'
+          assert t.count(old) == 1, t.count(old)
+          new = '    ksu_lsm_hook_built_in_init();\n#endif\n#if defined(CONFIG_KSU_SUSFS)\n    susfs_init();\n#endif\n#elif defined(CONFIG_KSU_SUSFS)'
+          t = t.replace(old, new, 1)
+          open(p, 'w').write(t)
+          print('init.c: susfs_init() now called under MANUAL_HOOK when SUSFS set')
+          PYEOF
+          grep -q "susfs_init();" KernelSU/kernel/core/init.c || { echo "ERROR: init.c susfs_init fix missing" >&2; exit 1; }
           echo "=== BakaSU driver fetched + fixed ==="
 
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
@@ -4805,6 +4845,11 @@ jobs:
           grep -q "^CONFIG_KSU_MANUAL_HOOK=y$" .config || { echo "ERROR: MANUAL_HOOK not y in .config after defconfig" >&2; exit 1; }
           grep -q "^CONFIG_KSU_SUSFS=y$" .config || { echo "ERROR: SUSFS not y in .config after defconfig" >&2; exit 1; }
           grep -q "^CONFIG_KSU_SUSFS_SUS_KSTAT=y$" .config || { echo "ERROR: SUS_KSTAT not y in .config after defconfig" >&2; exit 1; }
+          # SUSFS version, printed in the build step (user ask): proves the
+          # SUSFS version baked into this build, not just that it compiled.
+          echo "=== SUSFS version in this build ==="
+          grep "SUSFS_VERSION" include/linux/susfs.h
+          grep "CONFIG_KSU_SUSFS" .config
           # Host-tool guard: see v18 header. Build host tools serially
           # first so parallel jobs do not race to rebuild fixdep, then
           # prove fixdep is executable before the parallel build starts.
