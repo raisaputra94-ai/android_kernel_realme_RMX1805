@@ -1,3 +1,23 @@
+# v33-ksunext-susfs230 (2026-11-08): v32 verbatim MINUS one 4.14-ism in
+# the SUSFS core that 4.9 rejects.
+# v32's GitHub run FAILED at 04:42 UTC (12:42 SGT) in the build step:
+#   fs/susfs.c:1505:6: error: too few arguments to function 'fsnotify_add_mark'
+#   (called with 4 args; 4.9 declares 5)
+# Root cause (assistant's port bug): the 2.3.0 core patch was taken from
+# sidex15's 4.14 branch, where fsnotify_add_mark takes 4 args
+# (mark, inode, mnt, allow_dups -- the group was dropped from the
+# signature in 4.14). On 4.9 the signature is 5 args
+# (mark, group, inode, mnt, allow_dups). Fix (this version, one line):
+# the call in add_mark_on_inode is now the 4.9 form
+# fsnotify_add_mark(m, g, inode, NULL, 0), using the static group `g`
+# that already exists in the file (line 1399, set by
+# fsnotify_alloc_group). This is exactly the form sidex15's own 2.1.0
+# for-4.9 used. The statfs label fix from v32 is in here too (the v32
+# build got past fs/statfs.o and reached fs/susfs.o, so the label is
+# proven by the log). A full local build with the same GCC 9.4 is
+# running in parallel to catch any further 4.14-isms before the next
+# GitHub run; if it finds more, that becomes v34.
+#
 # v32-ksunext-susfs230 (2026-11-08): v31 verbatim MINUS one real compile
 # error, PLUS the label that makes the 2.3.0 statfs transplant complete.
 # v31's GitHub run FAILED at 04:33 UTC (12:33 SGT) in the build step -- the
@@ -127,7 +147,7 @@
 # check is dropped to match sidex15's 4.14 branch. 4.9 has no vfs_readlink
 # and no kstat result_mask, so namei.c needs no change and stat.c gates
 # the spoofer on app-uid + inode check instead.
-# VERIFICATION LEVEL: the combined patch below (md5 5261fa1ad3f304871ec6c12ce5ff6c7f,
+# VERIFICATION LEVEL: the combined patch below (md5 d5c8bd98b28287bfb2f2ecee6d3fe80d,
 # 25 files, 4051 lines) was generated from the verified test tree and
 # applies cleanly to a fresh pristine HEAD (git apply --check passed) with
 # SUSFS_VERSION v2.3.0 and zero references to removed 2.1.0 symbols;
@@ -2356,7 +2376,7 @@ jobs:
            	return error;
           diff --git a/fs/susfs.c b/fs/susfs.c
           new file mode 100644
-          index 00000000..6fbac636
+          index 00000000..83ea3b6e
           --- /dev/null
           +++ b/fs/susfs.c
           @@ -0,0 +1,1583 @@
@@ -3864,7 +3884,7 @@ jobs:
           +	fsnotify_init_mark(m, g);
           +	m->mask = mask;
           +
-          +	if (fsnotify_add_mark(m, inode, NULL, 0)) {
+          +	if (fsnotify_add_mark(m, g, inode, NULL, 0)) {
           +		fsnotify_put_mark(m);
           +		return -EINVAL;
           +	}
@@ -4540,8 +4560,8 @@ jobs:
            	audit_log_format(ab, " tclass=%s", secclass_map[tclass-1].name);
            }
           PATCHEOF
-          echo "expected md5: 5261fa1ad3f304871ec6c12ce5ff6c7f"
-          echo "5261fa1ad3f304871ec6c12ce5ff6c7f  /tmp/ksunext-susfs230.patch" | md5sum -c -
+          echo "expected md5: d5c8bd98b28287bfb2f2ecee6d3fe80d"
+          echo "d5c8bd98b28287bfb2f2ecee6d3fe80d  /tmp/ksunext-susfs230.patch" | md5sum -c -
           git apply --check /tmp/ksunext-susfs230.patch
           git apply /tmp/ksunext-susfs230.patch
           echo "=== applied changes ==="
