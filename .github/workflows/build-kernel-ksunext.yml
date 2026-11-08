@@ -1,3 +1,22 @@
+# v34-ksunext-susfs230 (2026-11-08): v33 verbatim MINUS a link failure,
+# PLUS one include line in the fetched driver.
+# v33's GitHub run FAILED at 04:55 UTC (12:55 SGT) at the FINAL LINK
+# (vmlinux) -- everything compiled, all SUSFS + KSU objects built:
+#   aarch64-linux-ld: drivers/built-in.o: in function `ksu_selinux_hide_init':
+#   drivers/kernelsu/feature/selinux_hide.c:584: undefined reference to `kthread_run'
+# Root cause (driver bug on 4.9, not the patch): selinux_hide.c calls
+# kthread_run() but never includes <linux/kthread.h>. On 4.9 kthread_run
+# is a MACRO in that header; without it the compiler emits an implicit
+# call to a kthread_run symbol that does not exist. On 5.x+ the header
+# arrives transitively via sched.h, so the driver builds there as-is.
+# Fix (this version): the fetch step adds `#include <linux/kthread.h>`
+# to the fetched driver's feature/selinux_hide.c (after the selinux
+# include, idempotent, fail-fast if it does not land). The driver is
+# cloned fresh every run, so the fix has to live in the fetch step, not
+# in a local copy. No other kthread_* call exists in the driver, and the
+# link reported no other undefined symbol, so this is the only one.
+# The combined SUSFS patch is UNCHANGED from v33 (md5 d5c8bd98...).
+#
 # v33-ksunext-susfs230 (2026-11-08): v32 verbatim MINUS one 4.14-ism in
 # the SUSFS core that 4.9 rejects.
 # v32's GitHub run FAILED at 04:42 UTC (12:42 SGT) in the build step:
@@ -4832,6 +4851,18 @@ jobs:
           echo "=== manager signature (KSU-Next official signer; standard + spoofed managers share it) ==="
           grep -q "KSU_NEXT_MANAGER_HASH := 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7" drivers/kernelsu/Kbuild || { echo "ERROR: manager hash mismatch in driver Kbuild" >&2; exit 1; }
           grep "KSU_NEXT_MANAGER" drivers/kernelsu/Kbuild
+          # 4.9 fix (v34): feature/selinux_hide.c calls kthread_run() but
+          # never includes <linux/kthread.h>. On 4.9 kthread_run is a MACRO
+          # in that header, so without it the compiler emits an implicit
+          # call to a kthread_run symbol that does not exist and the vmlinux
+          # link fails (undefined reference, selinux_hide.c:584). On 5.x+
+          # the header arrives transitively via sched.h, which is why the
+          # driver builds there without it. Add the include (idempotent:
+          # only if it is not already there) and prove it landed.
+          if ! grep -q "linux/kthread.h" drivers/kernelsu/feature/selinux_hide.c; then
+            sed -i '/#include "selinux\/selinux.h"/a #include <linux/kthread.h>' drivers/kernelsu/feature/selinux_hide.c
+          fi
+          grep -q "linux/kthread.h" drivers/kernelsu/feature/selinux_hide.c || { echo "ERROR: kthread.h include fix did not apply to selinux_hide.c" >&2; exit 1; }
           echo "KSU-Next v3.4.0-legacy-susfs-v2 fetched and verified"
 
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
