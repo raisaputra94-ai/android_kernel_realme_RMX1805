@@ -1,3 +1,12 @@
+# kernel-v40-bakasu-susfs230-official (2026-11-09): v39 PASSED inline_hook_check
+# (all 7 hooks found) but FAILED AT LINK: undefined reference to
+# ksu_handle_newfstat_ret and ksu_handle_fstat64_ret in fs/stat.c.
+# Root cause: those two functions live in the BakaSU driver ONLY under
+# #ifdef CONFIG_KSU_MANUAL_HOOK (ksud_integration.c:587-674). They do NOT
+# exist in the SUSFS inline method, so the kernel must not call them.
+# v40 = v39 with ONLY those two calls + their externs removed from the
+# hooks patch (fs/stat.c newfstat/fstat64). ksu_handle_stat IS defined
+# under CONFIG_KSU_SUSFS (sucompat.c:590), so the stat pre-hooks stay.
 # kernel-v39-bakasu-susfs230-official (2026-11-09): RENAMED from the
 # corrected v38 (md5 495ac622) -- same content, new filename, because the
 # first v38 (md5 22758eae, bad: fails inline_hook_check.mk) and the
@@ -269,7 +278,7 @@ jobs:
            	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
            		      AT_EMPTY_PATH)) != 0)
            		goto out;
-          @@ -295,6 +287,17 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+          @@ -295,6 +287,13 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
            	return cp_new_stat(&stat, statbuf);
            }
            
@@ -278,10 +287,6 @@ jobs:
           +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
           +				int *flags);
           +
-          +extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
-          +#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
-          +extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr); // optional
-          +#endif
           +#endif
           +
            #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
@@ -297,26 +302,6 @@ jobs:
            	error = vfs_fstatat(dfd, filename, &stat, flag);
            	if (error)
            		return error;
-          @@ -317,6 +323,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
-           	if (!error)
-           		error = cp_new_stat(&stat, statbuf);
-           
-          +#ifdef CONFIG_KSU
-          +	ksu_handle_newfstat_ret(&fd, &statbuf);
-          +#endif
-           	return error;
-           }
-           
-          @@ -435,6 +444,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
-           	if (!error)
-           		error = cp_new_stat64(&stat, statbuf);
-           
-          +#ifdef CONFIG_KSU // for 32-bit
-          +	ksu_handle_fstat64_ret(&fd, &statbuf);
-          +#endif
-           	return error;
-           }
-           
           @@ -444,6 +456,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
            	struct kstat stat;
            	int error;
