@@ -1,3 +1,26 @@
+# v32-ksunext-susfs230 (2026-11-08): v31 verbatim MINUS one real compile
+# error, PLUS the label that makes the 2.3.0 statfs transplant complete.
+# v31's GitHub run FAILED at 04:33 UTC (12:33 SGT) in the build step -- the
+# FIRST real compile error, and the only one in the whole log:
+#   fs/statfs.c:110:4: error: label 'bypass_orig_flow' used but not defined
+# Root cause (assistant's transplant bug): in vfs_statfs, the new 2.3.0
+# KSTAT block does `goto bypass_orig_flow;` after the spoof helper fills
+# the buffer -- but the LABEL itself was lost when the 2.1.0 open-redirect
+# block was removed. The label lives only inside the static helper
+# susfs_statfs_by_dentry, a different function, and C labels are
+# function-scoped. Fix (this version, 3 lines): restore the label at the
+# end of vfs_statfs, exactly where sidex15's 4.14 2.3.0 reference puts it
+# (after `error = statfs_by_dentry(path->dentry, buf);`, guarded by
+# SUS_MOUNT || SUS_KSTAT), so the goto skips the original statfs call
+# but still runs the f_flags fixup and returns the spoofed error. The
+# goto skips the call; it does NOT skip the return.
+# Same-bug sweep (this version): a per-function goto/label check over all
+# 19 transplanted .c files finds NO other missing label, and the toolchain
+# for a real local compile is now in place (kernel.org GCC 9.4.0 crosstool,
+# the exact one the workflow uses) -- a local full build is running in
+# parallel; if it finds anything else, that becomes v33. Until it reports,
+# the GitHub run remains the compile test.
+#
 # v31-ksunext-susfs230 (2026-11-08): v30 verbatim MINUS the broken fetch-step
 # check, PLUS a definition-level proof that the tree follows the official
 # KernelSU-Next non-GKI manual-integration guide.
@@ -104,8 +127,8 @@
 # check is dropped to match sidex15's 4.14 branch. 4.9 has no vfs_readlink
 # and no kstat result_mask, so namei.c needs no change and stat.c gates
 # the spoofer on app-uid + inode check instead.
-# VERIFICATION LEVEL: the combined patch below (md5 2064596a6e0c6d44f012a0380f0caf41,
-# 25 files, 4047 lines) was generated from the verified test tree and
+# VERIFICATION LEVEL: the combined patch below (md5 5261fa1ad3f304871ec6c12ce5ff6c7f,
+# 25 files, 4051 lines) was generated from the verified test tree and
 # applies cleanly to a fresh pristine HEAD (git apply --check passed) with
 # SUSFS_VERSION v2.3.0 and zero references to removed 2.1.0 symbols;
 # make olddefconfig resolves all KSU/SUSFS options to =y. A local full
@@ -2241,7 +2264,7 @@ jobs:
            	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
            		      AT_EMPTY_PATH)) != 0)
           diff --git a/fs/statfs.c b/fs/statfs.c
-          index 083dc0ac..11e41aa7 100644
+          index 083dc0ac..673c84c2 100644
           --- a/fs/statfs.c
           +++ b/fs/statfs.c
           @@ -7,6 +7,9 @@
@@ -2254,7 +2277,7 @@ jobs:
            #include "internal.h"
            
            static int flags_by_mnt(int mnt_flags)
-          @@ -63,10 +66,72 @@ static int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
+          @@ -63,11 +66,76 @@ static int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
            	return retval;
            }
            
@@ -2325,8 +2348,12 @@ jobs:
           +orig_flow:
           +#endif // #if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)
            	error = statfs_by_dentry(path->dentry, buf);
+          +#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_SUS_KSTAT)
+          +bypass_orig_flow:
+          +#endif // #if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_SUS_KSTAT)
            	if (!error)
            		buf->f_flags = calculate_f_flags(path->mnt);
+           	return error;
           diff --git a/fs/susfs.c b/fs/susfs.c
           new file mode 100644
           index 00000000..6fbac636
@@ -4513,8 +4540,8 @@ jobs:
            	audit_log_format(ab, " tclass=%s", secclass_map[tclass-1].name);
            }
           PATCHEOF
-          echo "expected md5: 2064596a6e0c6d44f012a0380f0caf41"
-          echo "2064596a6e0c6d44f012a0380f0caf41  /tmp/ksunext-susfs230.patch" | md5sum -c -
+          echo "expected md5: 5261fa1ad3f304871ec6c12ce5ff6c7f"
+          echo "5261fa1ad3f304871ec6c12ce5ff6c7f  /tmp/ksunext-susfs230.patch" | md5sum -c -
           git apply --check /tmp/ksunext-susfs230.patch
           git apply /tmp/ksunext-susfs230.patch
           echo "=== applied changes ==="
