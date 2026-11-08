@@ -1,3 +1,8 @@
+# kernel-v39-bakasu-susfs230-official (2026-11-09): RENAMED from the
+# corrected v38 (md5 495ac622) -- same content, new filename, because the
+# first v38 (md5 22758eae, bad: fails inline_hook_check.mk) and the
+# corrected v38 shared one filename and the bad one got pushed twice.
+# v39 IS the corrected v38. Nothing else changed.
 # kernel-v38-bakasu-susfs230-official (2026-11-08): v37 in the OFFICIAL
 # BakaSU+SUSFS shape. v36 and v37 both DID NOT BOOT (dropped to EDL).
 # v37's GitHub log (run 115068801439) CONFIRMED the susfs_init() fix DID
@@ -73,18 +78,309 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Minimal BakaSU selinux change (hooks.c bypass removal only)
+      - name: BakaSU hooks for SUSFS inline method (per inline_hook_check.mk)
         run: |
-          # v38 is the OFFICIAL BakaSU+SUSFS shape: SUSFS is the hook method,
-          # so NO manual-hooks patch (no fs/stat.c, fs/exec.c, fs/open.c,
-          # fs/read_write.c, kernel/reboot.c, drivers/input/input.c) and NO
-          # symbol exports (defconfig already has CONFIG_KALLSYMS_ALL=y).
-          # Only the hooks.c check_nnp_nosuid KSU bypass removal is kept
-          # (from the v24/v36 patch): BakaSU uses the "ksu" domain, so the
-          # bypass resolving "u:r:su:s0" never matches it anyway.
-          cat > /tmp/bakasu-hooks-minimal.patch <<'PATCHEOF'
+          # v38 is the OFFICIAL BakaSU+SUSFS shape: SUSFS is the hook method.
+          # BakaSU's inline_hook_check.mk REQUIRES these hooks present and
+          # the old bool hooks ABSENT (it fails the build otherwise):
+          # required: ksu_handle_setresuid, execveat, faccessat, sys_read,
+          # stat, sys_reboot, input_handle_event; incompatible (removed):
+          # ksu_vfs_read_hook, ksu_input_hook, ksu_execveat_hook,
+          # ksu_init_rc_hook. Hooks are guarded by CONFIG_KSU (set in v38),
+          # NOT CONFIG_KSU_MANUAL_HOOK (unset). No symbol exports needed
+          # (defconfig has CONFIG_KALLSYMS_ALL=y). hooks.c bypass removal
+          # kept (BakaSU uses the "ksu" domain; the bypass resolving
+          # "u:r:su:s0" never matches it anyway).
+          cat > /tmp/bakasu-hooks-susfs-inline.patch <<'PATCHEOF'
+          diff --git a/drivers/input/input.c b/drivers/input/input.c
+          index 6665c2a..4952676 100644
+          --- a/drivers/input/input.c
+          +++ b/drivers/input/input.c
+          @@ -377,20 +377,11 @@ static int input_get_disposition(struct input_dev *dev,
+           	return disposition;
+           }
+           
+          -#ifdef CONFIG_KSU
+          -extern bool ksu_input_hook __read_mostly;
+          -extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
+          -#endif
+          -
+           static void input_handle_event(struct input_dev *dev,
+           			       unsigned int type, unsigned int code, int value)
+           {
+           	int disposition = input_get_disposition(dev, type, code, &value);
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_input_hook))
+          -		ksu_handle_input_handle_event(&type, &code, &value);
+          -	#endif
+           	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
+           		add_input_randomness(type, code, value);
+           
+          @@ -445,11 +436,20 @@ static void input_handle_event(struct input_dev *dev,
+            * to 'seed' initial state of a switch or initial position of absolute
+            * axis, etc.
+            */
+          +#ifdef CONFIG_KSU
+          +extern __attribute__((cold)) int ksu_handle_input_handle_event(
+          +			unsigned int *type, unsigned int *code, int *value);
+          +#endif
+          +
+           void input_event(struct input_dev *dev,
+           		 unsigned int type, unsigned int code, int value)
+           {
+           	unsigned long flags;
+           
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_input_handle_event(&type, &code, &value);
+          +#endif
+          +
+           	if (is_event_supported(type, dev->evbit, EV_MAX)) {
+           
+           		spin_lock_irqsave(&dev->event_lock, flags);
+          diff --git a/fs/exec.c b/fs/exec.c
+          index 12fbb81..0244fdb 100644
+          --- a/fs/exec.c
+          +++ b/fs/exec.c
+          @@ -1816,11 +1816,12 @@ static int oppo_check_execveat_perm(struct file* filp)
+            */
+           
+           #ifdef CONFIG_KSU
+          -extern bool ksu_execveat_hook __read_mostly;
+          -extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+          -			void *envp, int *flags);
+          -extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+          -				 void *argv, void *envp, int *flags);
+          +__attribute__((hot))
+          +extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+          +				void *argv, void *envp, int *flags);
+          +__attribute__((hot))
+          +extern int ksu_handle_post_execveat(int *fd, struct filename **filename_ptr,
+          +				void *argv, void *envp, int *flags, int *retval);
+           #endif
+           
+           static int do_execveat_common(int fd, struct filename *filename,
+          @@ -1834,12 +1835,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           	struct files_struct *displaced;
+           	int retval;
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_execveat_hook))
+          -		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+          -	else
+          -		ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+          -	#endif
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+          +#endif
+           
+           	if (IS_ERR(filename))
+           		return PTR_ERR(filename);
+          @@ -1982,6 +1980,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           	putname(filename);
+           	if (displaced)
+           		put_files_struct(displaced);
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+          +#endif
+           	return retval;
+           
+           out:
+          @@ -2003,6 +2004,9 @@ static int do_execveat_common(int fd, struct filename *filename,
+           		reset_files_struct(displaced);
+           out_ret:
+           	putname(filename);
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+          +#endif
+           	return retval;
+           }
+           
+          diff --git a/fs/read_write.c b/fs/read_write.c
+          index 93a33c0..f3bd130 100644
+          --- a/fs/read_write.c
+          +++ b/fs/read_write.c
+          @@ -456,21 +456,10 @@ ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
+           }
+           EXPORT_SYMBOL(__vfs_read);
+           
+          -#ifdef CONFIG_KSU
+          -extern bool ksu_vfs_read_hook __read_mostly;
+          -extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
+          -			size_t *count_ptr, loff_t **pos);
+          -#endif
+          -
+           ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+           {
+           	ssize_t ret;
+           
+          -	#ifdef CONFIG_KSU
+          -	if (unlikely(ksu_vfs_read_hook))
+          -		ksu_handle_vfs_read(&file, &buf, &count, &pos);
+          -	#endif
+          -
+           	if (!(file->f_mode & FMODE_READ))
+           		return -EBADF;
+           	if (!(file->f_mode & FMODE_CAN_READ))
+          @@ -592,11 +581,20 @@ static inline void file_pos_write(struct file *file, loff_t pos)
+           		file->f_pos = pos;
+           }
+           
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
+          +			       size_t *count_ptr);
+          +#endif
+          +
+           SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+           {
+           	struct fd f = fdget_pos(fd);
+           	ssize_t ret = -EBADF;
+           
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_sys_read(fd, &buf, &count);
+          +#endif
+          +
+           	if (f.file) {
+           		loff_t pos = file_pos_read(f.file);
+           		ret = vfs_read(f.file, buf, count, &pos);
+          diff --git a/fs/stat.c b/fs/stat.c
+          index ce24d2a..b4bd56c 100644
+          --- a/fs/stat.c
+          +++ b/fs/stat.c
+          @@ -87,10 +87,6 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
+           }
+           EXPORT_SYMBOL(vfs_fstat);
+           
+          -#ifdef CONFIG_KSU
+          -extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
+          -#endif
+          -
+           int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
+           		int flag)
+           {
+          @@ -98,10 +94,6 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
+           	int error = -EINVAL;
+           	unsigned int lookup_flags = 0;
+           
+          -	#ifdef CONFIG_KSU
+          -	ksu_handle_stat(&dfd, &filename, &flag);
+          -	#endif
+          -
+           	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+           		      AT_EMPTY_PATH)) != 0)
+           		goto out;
+          @@ -295,6 +287,17 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+           	return cp_new_stat(&stat, statbuf);
+           }
+           
+          +#ifdef CONFIG_KSU
+          +__attribute__((hot))
+          +extern int ksu_handle_stat(int *dfd, const char __user **filename_user,
+          +				int *flags);
+          +
+          +extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
+          +#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
+          +extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr); // optional
+          +#endif
+          +#endif
+          +
+           #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
+           SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+           		struct stat __user *, statbuf, int, flag)
+          @@ -302,6 +305,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+           	struct kstat stat;
+           	int error;
+           
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_stat(&dfd, &filename, &flag);
+          +#endif
+           	error = vfs_fstatat(dfd, filename, &stat, flag);
+           	if (error)
+           		return error;
+          @@ -317,6 +323,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+           	if (!error)
+           		error = cp_new_stat(&stat, statbuf);
+           
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_newfstat_ret(&fd, &statbuf);
+          +#endif
+           	return error;
+           }
+           
+          @@ -435,6 +444,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
+           	if (!error)
+           		error = cp_new_stat64(&stat, statbuf);
+           
+          +#ifdef CONFIG_KSU // for 32-bit
+          +	ksu_handle_fstat64_ret(&fd, &statbuf);
+          +#endif
+           	return error;
+           }
+           
+          @@ -444,6 +456,9 @@ SYSCALL_DEFINE4(fstatat64, int, dfd, const char __user *, filename,
+           	struct kstat stat;
+           	int error;
+           
+          +#ifdef CONFIG_KSU // 32-bit su
+          +	ksu_handle_stat(&dfd, &filename, &flag);
+          +#endif
+           	error = vfs_fstatat(dfd, filename, &stat, flag);
+           	if (error)
+           		return error;
+          diff --git a/kernel/reboot.c b/kernel/reboot.c
+          index 2946ed1..8fde32b 100644
+          --- a/kernel/reboot.c
+          +++ b/kernel/reboot.c
+          @@ -277,6 +277,11 @@ static DEFINE_MUTEX(reboot_mutex);
+            *
+            * reboot doesn't sync: do that yourself before calling this.
+            */
+          +
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);
+          +#endif
+          +
+           SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           		void __user *, arg)
+           {
+          @@ -284,6 +289,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+           	char buffer[256];
+           	int ret = 0;
+           
+          +#ifdef CONFIG_KSU
+          +	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+          +#endif
+           	/* We only trust the superuser with rebooting the system. */
+           	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+           		return -EPERM;
+          diff --git a/kernel/sys.c b/kernel/sys.c
+          index 1215d1c..86a7850 100644
+          --- a/kernel/sys.c
+          +++ b/kernel/sys.c
+          @@ -577,6 +577,10 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
+           }
+           
+           
+          +#ifdef CONFIG_KSU
+          +extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);
+          +#endif
+          +
+           /*
+            * This function implements a generic ability to update ruid, euid,
+            * and suid.  This allows you to implement the 4.4 compatible seteuid().
+          @@ -589,6 +593,10 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
+           	int retval;
+           	kuid_t kruid, keuid, ksuid;
+           
+          +#ifdef CONFIG_KSU
+          +	(void)ksu_handle_setresuid(ruid, euid, suid);
+          +#endif
+          +
+           	kruid = make_kuid(ns, ruid);
+           	keuid = make_kuid(ns, euid);
+           	ksuid = make_kuid(ns, suid);
           diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-          index 20c27ff8..167bda31 100644
+          index 20c27ff..167bda3 100644
           --- a/security/selinux/hooks.c
           +++ b/security/selinux/hooks.c
           @@ -1096,7 +1096,6 @@ static int selinux_parse_opts_str(char *options,
@@ -130,9 +426,13 @@ jobs:
            	 * The only transitions we permit under NNP or nosuid
            	 * are transitions to bounded SIDs, i.e. SIDs that are
           PATCHEOF
-          git apply /tmp/bakasu-hooks-minimal.patch
+          git apply /tmp/bakasu-hooks-susfs-inline.patch
           grep -q "ksu_sid" security/selinux/hooks.c && { echo "ERROR: hooks.c KSU bypass still present" >&2; exit 1; }
-          echo "hooks.c: KSU bypass removed (minimal selinux change)"
+          grep -q "ksu_handle_sys_read" fs/read_write.c || { echo "ERROR: sys_read hook missing" >&2; exit 1; }
+          grep -q "ksu_handle_setresuid" kernel/sys.c || { echo "ERROR: setresuid hook missing" >&2; exit 1; }
+          grep -q "ksu_handle_input_handle_event" drivers/input/input.c || { echo "ERROR: input hook missing" >&2; exit 1; }
+          grep -q "ksu_vfs_read_hook" fs/read_write.c && { echo "ERROR: incompatible ksu_vfs_read_hook present" >&2; exit 1; }
+          echo "BakaSU SUSFS-inline hooks applied (inline_hook_check.mk satisfied)"
 
       - name: Apply SUSFS 2.3.0 patch (trimmed for BakaSU) + defconfig + helpers
         run: |
