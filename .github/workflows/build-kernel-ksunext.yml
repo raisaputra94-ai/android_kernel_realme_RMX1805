@@ -1,3 +1,31 @@
+# v31-ksunext-susfs230 (2026-11-08): v30 verbatim MINUS the broken fetch-step
+# check, PLUS a definition-level proof that the tree follows the official
+# KernelSU-Next non-GKI manual-integration guide.
+# v30's GitHub run FAILED at 04:26 UTC (12:26 SGT) in the fetch step:
+#   grep: drivers/kernelsu/kernel/: No such file or directory
+#   ERROR: ksu_handle_execveat missing from driver
+# Root cause (assistant's path bug, not the driver): the symlink
+# drivers/kernelsu ALREADY points at the driver's kernel/ dir
+# (../KernelSU-Next/kernel), so drivers/kernelsu/kernel/ is a path that
+# does not exist. The fetch step grepped a non-existent directory. The
+# clone, the tag pin (d999a2af), the symlink and the Kconfig checks all
+# passed before it. Fix: grep drivers/kernelsu/ (the symlink itself).
+# OFFICIAL GUIDE CHECK (user asked to follow it, 2026-11-08 12:27 SGT):
+# https://kernelsu-next.github.io/webpage/pages/how-to-integrate-for-non-gki.html#manually-modify-the-kernel-source
+# The guide's manual integration = setup.sh legacy + CONFIG_KSU=y + five
+# hook calls (exec, open, read_write, stat, reboot). This tree ALREADY has
+# all five, with the exact signatures this driver version provides --
+# verified function by function against the live sidex15 fork (see the
+# fetch step, which now proves every hook has a real DEFINITION in the
+# driver). The guide's literal patches are reference shapes for a bare
+# kernel against upstream `next`; two do not fit this fork's driver, so
+# they are NOT applied (details in the fetch step): its read_write.c patch
+# declares a 3-arg ksu_handle_sys_read, but this driver defines it 1-arg
+# as the kprobe handler -- the manual hook is ksu_handle_vfs_read; and its
+# exec.c patch drops the bool dispatch the driver is built around. The
+# guide's setup.sh line is also not used (it would clone upstream, not
+# the fork -- the trap documented in v29). Everything else is v30 unchanged.
+#
 # v30-ksunext-susfs230 (2026-11-08): v29 verbatim MINUS one false-positive check.
 # v29's GitHub run FAILED at 04:15 UTC (12:15 SGT) in the patch step -- but the
 # PATCH ITSELF WAS FINE: md5 OK, git apply clean, 22 files changed, SUSFS
@@ -4725,9 +4753,34 @@ jobs:
           echo "=== driver must have MANUAL_HOOK + SUSFS menu ==="
           grep -q "KSU_MANUAL_HOOK" drivers/kernelsu/Kconfig || { echo "ERROR: driver has no KSU_MANUAL_HOOK" >&2; exit 1; }
           grep -q "KSU_SUSFS" drivers/kernelsu/Kconfig || { echo "ERROR: driver has no SUSFS menu" >&2; exit 1; }
-          echo "=== hook functions the kernel source calls (must all be present) ==="
-          for FN in ksu_handle_execveat ksu_handle_faccessat ksu_handle_stat ksu_handle_sys_reboot; do
-            grep -rq "$FN" drivers/kernelsu/kernel/ || { echo "ERROR: $FN missing from driver" >&2; exit 1; }
+          # Official guide (manually modify the kernel source) requires five
+          # hooks: do_execve (fs/exec.c), SYSCALL_DEFINE3 faccessat
+          # (fs/open.c), vfs_read (fs/read_write.c), SYSCALL_DEFINE4
+          # newfstatat (fs/stat.c), SYSCALL_DEFINE4 reboot (kernel/reboot.c).
+          # This tree already carries all five (from the BakaSU era) plus the
+          # input hook, with the exact signatures THIS driver version
+          # provides -- verified against the live fork. Two places where the
+          # guide's literal patches do NOT apply to this driver version:
+          #  - read_write.c: the guide declares a 3-arg ksu_handle_sys_read,
+          #    but this driver defines it with ONE arg (runtime/
+          #    ksud_integration.c:469) as the kprobe-path handler; the
+          #    manual hook here is ksu_handle_vfs_read (the "working dummy"
+          #    for manual hooks, :771), which is what the tree calls.
+          #  - exec.c: the guide calls ksu_handle_execveat unconditionally
+          #    in do_execve/compat_do_execve; the tree keeps the bool
+          #    dispatch (ksu_execveat_hook on -> execveat, else sucompat
+          #    directly), which is what this driver is built for -- the
+          #    bool is defined in the driver and ksu_handle_execveat
+          #    itself ends by calling sucompat.
+          # So instead of re-applying the guide's patches, this step PROVES
+          # the contract: every hook the kernel source calls must have a
+          # real DEFINITION (not just a declaration) in the driver.
+          echo "=== every hook the kernel source calls must be DEFINED in the driver ==="
+          for FN in ksu_handle_execveat ksu_handle_execveat_sucompat ksu_handle_faccessat ksu_handle_stat ksu_handle_sys_reboot ksu_handle_vfs_read ksu_handle_input_handle_event; do
+            grep -rhE "^[a-zA-Z_].*\<$FN\(" drivers/kernelsu/ --include='*.c' | grep -vq "^extern" || { echo "ERROR: $FN has no definition in the driver" >&2; exit 1; }
+          done
+          for B in ksu_execveat_hook ksu_input_hook ksu_vfs_read_hook ksu_init_rc_hook; do
+            grep -q "^bool.*$B" drivers/kernelsu/runtime/ksud_integration.c || { echo "ERROR: $B has no definition in the driver" >&2; exit 1; }
           done
           echo "=== manager signature (KSU-Next official signer; standard + spoofed managers share it) ==="
           grep -q "KSU_NEXT_MANAGER_HASH := 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7" drivers/kernelsu/Kbuild || { echo "ERROR: manager hash mismatch in driver Kbuild" >&2; exit 1; }
