@@ -1,4 +1,11 @@
-# kernel-v14-bakasu-susfs230-inline (2026-11-09): v13 + KALLSYMS_ALL fix.
+# kernel-v15-bakasu-susfs230-inline (2026-11-09): v14 + debug step.
+# v14 FAILED at susfs_compat.mk:35 again, even though the build log shows
+# the KALLSYMS_ALL .config fail-fast PASSED (so DEBUG_KERNEL was not the
+# cause -- v14's theory was wrong). This build adds a debug step before the
+# build that prints each of the 7 gate conditions separately, so the next
+# log names the failing one. No other change. Do NOT build a v16 until the
+# debug output is read. BakaSU 516d3e87, SUSFS 2.3.0 inline hook, NO
+# MANUAL_HOOK, enforcing cmdline, pstore, low-RAM. Manager: BakaSU (spoofed).
 # v13 FAILED TO BUILD (run 115442068352, step 13) at susfs_compat.mk:35 again,
 # even though the marker was written. Root cause: susfs_compat.mk also
 # requires CONFIG_KALLSYMS_ALL=y in .config, and KALLSYMS_ALL depends on
@@ -6948,6 +6955,27 @@ jobs:
             https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/9.4.0/x86_64-gcc-9.4.0-nolibc-aarch64-linux.tar.xz
           tar -xf gcc.tar.xz
           ./gcc-9.4.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc --version
+
+      - name: DEBUG susfs_compat.mk gate conditions (one per line)
+        run: |
+          # v14 proved .config HAS KALLSYMS_ALL=y, yet susfs_compat.mk:35
+          # still fails. Print each of its 7 conditions separately so the
+          # log names the failing one. Uses the same paths make sees.
+          make RMX1805_ArcticFox-KSU_defconfig >/dev/null 2>&1
+          echo "== 1 VERSION.PATCHLEVEL =="
+          echo "$(awk '$1 == "VERSION" {print $3}' Makefile).$(awk '$1 == "PATCHLEVEL" {print $3}' Makefile)"
+          echo "== 2/3/4 .config =="
+          grep -E '^CONFIG_(ARM64|KSU|KALLSYMS_ALL)=' .config || echo "(missing)"
+          echo "== 5 marker file =="
+          ls -la BakaSU/kernel/.susfs-4.9-auto-reviewed 2>&1
+          cat BakaSU/kernel/.susfs-4.9-auto-reviewed 2>&1
+          echo "== 5b same file via the symlink drivers/kernelsu =="
+          ls -la drivers/kernelsu/.susfs-4.9-auto-reviewed 2>&1
+          echo "== 6 SUSFS_VERSION line =="
+          grep -n 'define SUSFS_VERSION' include/linux/susfs.h || echo "(missing)"
+          echo "== 7 forbidden strings in hooks.c / selinuxfs.c =="
+          grep -n 'ksu_selinux_hide_running\|ksu_hide_setprocattr\|fake_state' security/selinux/hooks.c security/selinux/selinuxfs.c || echo "(none found - good)"
+          echo "== end debug =="
 
       - name: Build kernel
         run: |
