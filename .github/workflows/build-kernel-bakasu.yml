@@ -1,4 +1,10 @@
-# kernel-v15-bakasu-susfs230-inline (2026-11-09): v14 + debug step.
+# kernel-v16-bakasu-susfs230-inline (2026-11-09): v15 + ARCH fix in debug.
+# v15's debug step produced NO output and died at once -- my bug: it never
+# set ARCH=arm64, so `make defconfig` looked in arch/x86/configs/, failed,
+# and bash -e killed the script before any echo ran. This build only adds
+# `export ARCH=arm64` to the debug step. The gate itself is unchanged; the
+# debug output will now actually print. BakaSU 516d3e87, SUSFS 2.3.0 inline
+# hook, NO MANUAL_HOOK, enforcing cmdline, pstore, low-RAM. Manager: BakaSU.
 # v14 FAILED at susfs_compat.mk:35 again, even though the build log shows
 # the KALLSYMS_ALL .config fail-fast PASSED (so DEBUG_KERNEL was not the
 # cause -- v14's theory was wrong). This build adds a debug step before the
@@ -6958,6 +6964,7 @@ jobs:
 
       - name: DEBUG susfs_compat.mk gate conditions (one per line)
         run: |
+          export ARCH=arm64
           # v14 proved .config HAS KALLSYMS_ALL=y, yet susfs_compat.mk:35
           # still fails. Print each of its 7 conditions separately so the
           # log names the failing one. Uses the same paths make sees.
