@@ -1,3 +1,9 @@
+# kernel-v3-backslashxx-susfs230-enforcing (2026-11-09): v2 BOOTED but the
+# phone is PERMISSIVE (user getenforce = Permissive). Root cause: v2 is based
+# on v25, which predates the enforcing cmdline patch (added in v27), so the
+# AnyKernel3 zip never patched the cmdline and the v28 ROM permissive boot
+# image stayed permissive. This is NOT a false positive -- the apps are right.
+# Fix: the v27 patch_cmdline line, inserted after split_boot in anykernel.sh.
 # kernel-v2-backslashxx-susfs230 (2026-11-09): v1 FAILED AT LINK:
 # undefined reference to current_sid in susfs_get_current_sid and
 # the three susfs_is_current_*_domain functions. Root cause: on 4.9,
@@ -5201,6 +5207,11 @@ jobs:
 
           # boot install
           split_boot;
+
+          # enforce SELinux: replace permissive token with enforcing (v3; v2 had no
+          # cmdline patch so the phone booted Permissive -- getenforce proved it).
+          # patch_cmdline replaces the token if present, else appends it.
+          patch_cmdline androidboot.selinux=permissive androidboot.selinux=enforcing;
 
           # flash boot and dtbo (dtbo is skipped automatically if not bundled)
           flash_boot;
