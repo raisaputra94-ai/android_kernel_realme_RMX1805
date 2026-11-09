@@ -1,3 +1,11 @@
+# kernel-v10-ksunext-official-legacy-nosusfs (2026-11-09): v8 + build fix.
+# v8 FAILED TO BUILD (run 115412538293, step 9): "ERROR: SUSFS not y in
+# .config after defconfig". My bug -- v5/v8 inherited v35's SUSFS fail-fast
+# check in the build step but dropped the SUSFS defconfig, so the check
+# could never pass. This build removes those two check lines (nothing else).
+# Still the isolation test: official legacy, NO SUSFS driver patch, NO
+# SUSFS defconfig. If it boots, the SUSFS port is the v7 hang; if it hangs
+# too, the official driver itself is broken on 4.9.
 # kernel-v8-ksunext-official-legacy-nosusfs (2026-11-09): ISOLATION TEST.
 # v7 (official legacy + SUSFS 2.3.0) hangs at the Realme logo. This build
 # is v5 + the pin fix ONLY: official KSU-Next legacy, NO SUSFS at all
@@ -4993,11 +5001,9 @@ jobs:
             grep -q "^CONFIG_PSTORE_CONSOLE=y$" .config || { echo "ERROR: PSTORE_CONSOLE not y in .config after defconfig - pstore-fix did not reach defconfig" >&2; exit 1; }
             grep -q "^CONFIG_PSTORE_PMSG=y$" .config || { echo "ERROR: PSTORE_PMSG not y in .config after defconfig - pstore-fix did not reach defconfig" >&2; exit 1; }
           fi
-          # SUSFS fail-fast: the patch step forced these; prove they survived defconfig.
+          # No SUSFS in this build (isolation test); KSU/MANUAL_HOOK checks only.
           grep -q "^CONFIG_KSU=y$" .config || { echo "ERROR: KSU not y in .config after defconfig" >&2; exit 1; }
           grep -q "^CONFIG_KSU_MANUAL_HOOK=y$" .config || { echo "ERROR: MANUAL_HOOK not y in .config after defconfig" >&2; exit 1; }
-          grep -q "^CONFIG_KSU_SUSFS=y$" .config || { echo "ERROR: SUSFS not y in .config after defconfig" >&2; exit 1; }
-          grep -q "^CONFIG_KSU_SUSFS_SUS_KSTAT=y$" .config || { echo "ERROR: SUS_KSTAT not y in .config after defconfig" >&2; exit 1; }
           # Host-tool guard: see v18 header. Build host tools serially
           # first so parallel jobs do not race to rebuild fixdep, then
           # prove fixdep is executable before the parallel build starts.
