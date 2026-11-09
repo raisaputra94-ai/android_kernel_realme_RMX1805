@@ -1,4 +1,13 @@
-# kernel-v11-bakasu-susfs230-inline (2026-11-09): BakaSU + SUSFS v2.3.0,
+# kernel-v12-bakasu-susfs230-inline (2026-11-09): v11 + the missing marker.
+# v11 FAILED TO BUILD (run 115438576819, step 12): susfs_compat.mk:35
+# "BakaSU 4.9 automatic SELinux adaptation requires reviewed source
+# preparation." Root cause: the bakasu-selinux patch adds a gate requiring
+# KernelSU/kernel/.susfs-4.9-auto-reviewed to contain "lineage-4.9-auto-v1".
+# Chorusfruit writes it in check-susfs-4.9.sh --prepare; v11 never created
+# it. This build adds a step that verifies the prerequisites and writes the
+# marker after all source prep. Everything else is identical to v11.
+# BakaSU 516d3e87, SUSFS 2.3.0 inline hook, NO MANUAL_HOOK, enforcing
+# cmdline, pstore, low-RAM. Manager: BakaSU (spoofed).
 # INLINE HOOK method, from the chorusfruit OnePlus SDM845 project
 # (github.com/chorusfruit-233/OnePlus_SDM845_BakaSU_SUSFS, proven on
 # 4.9.337 -- same kernel version as RMX1805). This REPLACES the failed
@@ -6707,6 +6716,24 @@ jobs:
           git apply --whitespace=nowarn /tmp/bakasu-preinit-module-4.9.patch
           grep -q "ksu_setup_preinit_file" fs/exec.c || { echo "ERROR: preinit hook missing from exec.c" >&2; exit 1; }
           echo "preinit-module patch applied"
+
+      - name: Write SUSFS 4.9 reviewed-source marker (susfs_compat.mk gate)
+        run: |
+          # BakaSU's susfs_compat.mk (from the bakasu-selinux patch) refuses
+          # to build unless KernelSU/kernel/.susfs-4.9-auto-reviewed contains
+          # exactly "lineage-4.9-auto-v1". Chorusfruit writes it in
+          # check-susfs-4.9.sh --prepare after verifying the sources; v11
+          # never created it, so the build died at susfs_compat.mk:35.
+          # Verify the prerequisites first (same as the chorusfruit check),
+          # then write the marker.
+          grep -qx '#define SUSFS_VERSION "v2.3.0"' include/linux/susfs.h || { echo "ERROR: SUSFS_VERSION is not v2.3.0 in susfs.h" >&2; exit 1; }
+          for FN in ksu_handle_execveat_sucompat ksu_handle_faccessat ksu_handle_stat ksu_handle_sys_read ksu_handle_setresuid ksu_handle_sys_reboot ksu_handle_input_handle_event; do
+            grep -rq "$FN" fs/ kernel/ drivers/input/ || { echo "ERROR: inline hook $FN missing from tree" >&2; exit 1; }
+          done
+          if grep -Eq 'ksu_selinux_hide_running|ksu_hide_setprocattr|fake_state' security/selinux/hooks.c security/selinux/selinuxfs.c; then echo "ERROR: GKI/manual SELinux hooks present, cannot use the 4.9 auto path" >&2; exit 1; fi
+          printf 'lineage-4.9-auto-v1\n' > KernelSU/kernel/.susfs-4.9-auto-reviewed
+          grep -qx 'lineage-4.9-auto-v1' KernelSU/kernel/.susfs-4.9-auto-reviewed || { echo "ERROR: marker file not written" >&2; exit 1; }
+          echo "SUSFS 4.9 reviewed-source marker written"
 
       - name: Apply 2GB low-RAM tweaks
         run: |
