@@ -1,4 +1,15 @@
-# kernel-v16-bakasu-susfs230-inline (2026-11-09): v15 + ARCH fix in debug.
+# kernel-v17-bakasu-susfs230-inline (2026-11-09): v16 + in-mk diagnostics.
+# The other LLM was right about one thing: my debug step instrumented the
+# wrong context (a top-level shell step, not the sub-make where the gate
+# runs). But its two specific guesses are WRONG for this tree -- verified
+# against the real files: (1) top Makefile line 484 DOES export VERSION
+# PATCHLEVEL, so they are visible in the sub-make; (2) KSU_SRC is assigned
+# at BakaSU Kbuild line 63, well before susfs_compat.mk is included at
+# line 192, so it is bound. This build puts $(info ...) diagnostics INSIDE
+# susfs_compat.mk itself, right before the gate, so the real build prints
+# the real bindings. Read the build log for the DEBUG lines -- the blank
+# one names the failing condition. No other change. BakaSU 516d3e87, SUSFS
+# 2.3.0 inline hook, NO MANUAL_HOOK, enforcing cmdline, pstore, low-RAM.
 # v15's debug step produced NO output and died at once -- my bug: it never
 # set ARCH=arm64, so `make defconfig` looked in arch/x86/configs/, failed,
 # and bash -e killed the script before any echo ran. This build only adds
@@ -781,6 +792,11 @@ jobs:
           +# Only the pinned Lineage 4.9 ARM64 port has been reviewed for the NonGKI
           +# automatic SELinux hooks. prepare-sources.sh writes this marker after checking
           +# the kernel ABI and the adaptation patch; it does not certify device testing.
+          +# DEBUG (v17): print the real bindings inside this sub-make.
+          +$(info -- DEBUG VERSION=[$(VERSION)] PATCHLEVEL=[$(PATCHLEVEL)])
+          +$(info -- DEBUG CONFIG_ARM64=[$(CONFIG_ARM64)] CONFIG_KSU=[$(CONFIG_KSU)] CONFIG_KALLSYMS_ALL=[$(CONFIG_KALLSYMS_ALL)])
+          +$(info -- DEBUG KSU_SRC=[$(KSU_SRC)] srctree=[$(srctree)])
+          +$(info -- DEBUG marker_path=[$(KSU_SRC)/.susfs-4.9-auto-reviewed])
           +SUSFS_4_9_AUTO_REVIEWED := $(shell \
           +    test "$(VERSION).$(PATCHLEVEL)" = "4.9" && \
           +    test "$(CONFIG_ARM64)" = "y" && \
