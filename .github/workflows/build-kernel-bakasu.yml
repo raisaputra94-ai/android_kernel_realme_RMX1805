@@ -1,4 +1,13 @@
-# kernel-v18-bakasu-susfs230-inline (2026-11-09): v17 + the real fix.
+# kernel-v19-bakasu-susfs230-inline (2026-11-09): v18 + stat.c fix.
+# v18 PASSED the susfs_compat.mk gate (the KSU "Y" fix worked) but FAILED
+# TO COMPILE at fs/stat.c: 'fname' and 'flags' undeclared in vfs_fstatat.
+# Root cause: the inline-hook script assumes the parameter is named "flags"
+# (OnePlus tree); RMX1805 uses mainline "flag", so the script's fname
+# declaration anchor never matched while the ksu_handle_stat block was
+# inserted anyway. This build adds a fix-up step after the inline-hook
+# script: declare fname in vfs_fstatat and use &flag in the call. Only
+# stat.c failed in v18; all other files compiled. BakaSU 516d3e87, SUSFS
+# 2.3.0 inline hook, NO MANUAL_HOOK, enforcing cmdline, pstore, low-RAM.
 # v17's DEBUG output found it: CONFIG_KSU=[Y] (UPPERCASE) in the sub-make,
 # but the gate tests for lowercase "y" -- condition 3 fails every time.
 # Everything else is correct (VERSION 4.9, ARM64 y, KALLSYMS_ALL y, KSU_SRC
@@ -6614,6 +6623,34 @@ jobs:
           grep -q "ksu_handle_sys_reboot" kernel/reboot.c || { echo "ERROR: reboot.c inline hook missing" >&2; exit 1; }
           grep -q "ksu_handle_setresuid" kernel/sys.c || { echo "ERROR: sys.c inline hook missing" >&2; exit 1; }
           echo "inline hooks applied"
+
+      - name: Fix stat.c flag/fname for RMX1805 (script expects OnePlus flags)
+        run: |
+          # The inline-hook script's stat.c section assumes vfs_fstatat's
+          # parameter is named "flags" (OnePlus tree). RMX1805 uses mainline
+          # "flag", so the script's fname-declaration anchor
+          # "if ((flags & ..." never matches (sed silently does nothing)
+          # while the ksu_handle_stat block IS inserted, leaving `fname`
+          # and `flags` undeclared (v18 build error). Fix both here.
+          python3 - <<'PYEOF'
+          p = 'fs/stat.c'
+          s = open(p).read()
+          # 1. Declare fname in vfs_fstatat, before the flag check.
+          if 'struct filename *fname = NULL;' not in s:
+              anchor = 'if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |'
+              assert s.count(anchor) == 1, 'flag anchor'
+              s = s.replace(anchor,
+                  '#ifdef CONFIG_KSU_SUSFS\n\tstruct filename *fname = NULL;\n#endif\n' + anchor, 1)
+          # 2. The script calls ksu_handle_stat(&dfd, &fname, &flags);
+          # RMX1805's variable is `flag`, not `flags`.
+          old = 'ksu_handle_stat(&dfd, &fname, &flags)'
+          assert s.count(old) == 1, 'ksu_handle_stat call'
+          s = s.replace(old, 'ksu_handle_stat(&dfd, &fname, &flag)', 1)
+          open(p, 'w').write(s)
+          print('stat.c fixed: fname declared, ksu_handle_stat uses &flag')
+          PYEOF
+          grep -n 'struct filename \*fname = NULL;' fs/stat.c
+          grep -n 'ksu_handle_stat(&dfd, &fname, &flag)' fs/stat.c
 
       - name: Fix init->ksu bounded transition (hooks.c su SID -> ksu SID)
         run: |
