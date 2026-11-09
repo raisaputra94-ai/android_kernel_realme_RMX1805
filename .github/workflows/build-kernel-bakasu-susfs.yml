@@ -1,3 +1,12 @@
+# kernel-v1-backslashxx-susfs230 (2026-11-09): v0 FAILED at step 8
+# (driver patch verification): the greps used kernel/Kconfig and
+# kernel/ksu.c, but inside drivers/kernelsu those files are just
+# Kconfig and ksu.c (drivers/kernelsu IS the driver kernel/ dir; git
+# apply resolved the kernel/ prefix against the repo root, grep does
+# not). The patch itself applied fine. Fixed the three greps.
+# Also renamed the step/echo: the driver patch is sidex15 v2.2.0 but
+# the SUSFS version is 2.3.0 from the tree patch (step 4 verified
+# #define SUSFS_VERSION "v2.3.0"); the old name misled the user.
 # kernel-v0-backslashxx-susfs230 (2026-11-09): RESET to v0. BakaSU is DONE --
 # v36, v37, v40 all built green but dropped to EDL on boot. Fresh start:
 # backslashxx KernelSU v3.3.1 (tag v3.3.1-38, commit feeec8e -- the line
@@ -4403,7 +4412,7 @@ jobs:
           if grep -q "KSU_MANUAL_HOOK" drivers/kernelsu/Kconfig; then echo "ERROR: driver has KSU_MANUAL_HOOK - the hooks patch guard is wrong" >&2; exit 1; fi
           echo "backslashxx KernelSU v3.3.1-38 fetched and verified"
 
-      - name: Apply SUSFS 2.2.0 driver patch (sidex15, ported to backslashxx v3.3.1)
+      - name: Apply SUSFS driver patch (sidex15, ported to backslashxx v3.3.1)
         run: |
           cat > /tmp/susfs220-driver.patch <<'PATCHEOF'
           diff --git a/kernel/Kconfig b/kernel/Kconfig
@@ -5051,10 +5060,10 @@ jobs:
           cd drivers/kernelsu
           git apply --check /tmp/susfs220-driver.patch
           git apply /tmp/susfs220-driver.patch
-          echo "SUSFS 2.2.0 driver patch applied (ported to backslashxx)"
-          grep -q "config KSU_SUSFS" kernel/Kconfig || { echo "ERROR: KSU_SUSFS missing from driver Kconfig" >&2; exit 1; }
-          grep -q "susfs_init();" kernel/ksu.c || { echo "ERROR: susfs_init() call missing from driver ksu.c" >&2; exit 1; }
-          grep -q "config KSU_SUSFS_TRY_UMOUNT" kernel/Kconfig || { echo "ERROR: TRY_UMOUNT missing from driver Kconfig" >&2; exit 1; }
+          echo "SUSFS driver patch applied (ported to backslashxx; SUSFS version is 2.3.0 from tree)"
+          grep -q "config KSU_SUSFS" Kconfig || { echo "ERROR: KSU_SUSFS missing from driver Kconfig" >&2; exit 1; }
+          grep -q "susfs_init();" ksu.c || { echo "ERROR: susfs_init() call missing from driver ksu.c" >&2; exit 1; }
+          grep -q "config KSU_SUSFS_TRY_UMOUNT" Kconfig || { echo "ERROR: TRY_UMOUNT missing from driver Kconfig" >&2; exit 1; }
           cd ../..
 
       - name: Install aarch64 toolchain (GCC 9.4, kernel.org crosstool)
