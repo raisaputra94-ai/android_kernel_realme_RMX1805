@@ -1,4 +1,13 @@
-# kernel-v17-bakasu-susfs230-inline (2026-11-09): v16 + in-mk diagnostics.
+# kernel-v18-bakasu-susfs230-inline (2026-11-09): v17 + the real fix.
+# v17's DEBUG output found it: CONFIG_KSU=[Y] (UPPERCASE) in the sub-make,
+# but the gate tests for lowercase "y" -- condition 3 fails every time.
+# Everything else is correct (VERSION 4.9, ARM64 y, KALLSYMS_ALL y, KSU_SRC
+# and marker path right). This build (a) accepts "Y" as well as "y" for
+# CONFIG_KSU in the gate, and (b) fixes the hunk header (+14,23 -> +14,28)
+# -- my 5 debug lines made the hunk 28 lines, the stale header truncated
+# the tail and dropped the final `endif` ("missing 'endif'" at line 37).
+# DEBUG lines kept. BakaSU 516d3e87, SUSFS 2.3.0 inline hook, NO MANUAL_HOOK,
+# enforcing cmdline, pstore, low-RAM. Manager: BakaSU (spoofed).
 # The other LLM was right about one thing: my debug step instrumented the
 # wrong context (a top-level shell step, not the sub-make where the gate
 # runs). But its two specific guesses are WRONG for this tree -- verified
@@ -784,7 +793,7 @@ jobs:
           index 904bad1..4ff0593 100644
           --- a/kernel/tools/susfs_compat.mk
           +++ b/kernel/tools/susfs_compat.mk
-          @@ -14,3 +14,23 @@ ifeq ($(shell grep -q "ksu_install_su_fd" $(srctree)/fs/exec.c; echo $$?),0)
+          @@ -14,3 +14,28 @@ ifeq ($(shell grep -q "ksu_install_su_fd" $(srctree)/fs/exec.c; echo $$?),0)
            $(info -- $(REPO_NAME)/compat: ksu_install_su_fd direct call found)
            ccflags-y += -DKSU_COMPAT_HAS_SUSFS_INSTALL_SU_FD_DIRECT_CALL
            endif
@@ -800,7 +809,7 @@ jobs:
           +SUSFS_4_9_AUTO_REVIEWED := $(shell \
           +    test "$(VERSION).$(PATCHLEVEL)" = "4.9" && \
           +    test "$(CONFIG_ARM64)" = "y" && \
-          +    test "$(CONFIG_KSU)" = "y" && \
+          +    { test "$(CONFIG_KSU)" = "y" || test "$(CONFIG_KSU)" = "Y"; } && \
           +    test "$(CONFIG_KALLSYMS_ALL)" = "y" && \
           +    grep -qx 'lineage-4.9-auto-v1' $(KSU_SRC)/.susfs-4.9-auto-reviewed 2>/dev/null && \
           +    grep -qx '\#define SUSFS_VERSION "v2.3.0"' $(srctree)/include/linux/susfs.h && \
