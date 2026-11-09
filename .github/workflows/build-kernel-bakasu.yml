@@ -1,3 +1,12 @@
+# kernel-v7-ksunext-official-legacy-susfs230 (2026-11-09): v6 + ONE-LINE FIX.
+# v6 failed at step 7 (run 115404009131): the driver pin check compared
+# `git rev-parse HEAD` (FULL 40-char hash) to the SHORT hash b933b1f72811,
+# which can never match -- my bug when writing v5 (v35 used the full
+# 40-char hash for sidex15). The legacy branch HEAD is still b933b1f
+# (verified via ls-remote), so the fix is just the full hash in the test.
+# Everything else is identical to v6: official legacy + SUSFS 2.3.0,
+# ported driver patch md5 69c694a0dc5f12a409977c0c58eae32b, enforcing
+# cmdline, pstore, low-RAM. Manager: KSU-Next v3.4.0 (33294).
 # kernel-v6-ksunext-official-legacy-susfs230 (2026-11-09): v5 PLUS SUSFS 2.3.0.
 # v5 was official KSU-Next legacy WITHOUT SUSFS. This ports the sidex15
 # SUSFS v2.2.0 driver patch to the official legacy driver (b933b1f):
@@ -4905,7 +4914,7 @@ jobs:
           # Clone the official repo explicitly at the legacy branch.
           git clone --quiet --depth 1 --branch legacy https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           cd KernelSU-Next
-          test "$(git rev-parse HEAD)" = "b933b1f72811" || { echo "ERROR: KSU-Next HEAD is not the pinned legacy commit" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "b933b1f728116a456fbebf27b6a8772a640cdf23" || { echo "ERROR: KSU-Next HEAD is not the pinned legacy commit" >&2; exit 1; }
           git log --oneline -1
           cd ..
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
