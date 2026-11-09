@@ -1,3 +1,15 @@
+# kernel-v2-backslashxx-susfs230 (2026-11-09): v1 FAILED AT LINK:
+# undefined reference to current_sid in susfs_get_current_sid and
+# the three susfs_is_current_*_domain functions. Root cause: on 4.9,
+# current_sid() is static inline in security/selinux/hooks.c and NOT
+# visible to the driver. Fix: a 4.9-compatible susfs_current_sid()
+# helper using selinux_cred(current_cred())->sid (the pattern
+# backslashxx selinux.c already uses). ALSO fixed: my first edit of
+# the ported patch left the selinux.c hunk header at +241,99 while
+# the helper added 13 lines (actual +112) -- git apply silently
+# truncated the tail, dropping susfs_is_current_init_domain,
+# susfs_set_priv_app_sid and the #endif. Header corrected to +241,112
+# and the patch re-verified to apply fully (352-line selinux.c).
 # kernel-v1-backslashxx-susfs230 (2026-11-09): v0 FAILED at step 8
 # (driver patch verification): the greps used kernel/Kconfig and
 # kernel/ksu.c, but inside drivers/kernelsu those files are just
@@ -4766,7 +4778,7 @@ jobs:
           index 17b2416..ef74906 100644
           --- a/kernel/selinux/selinux.c
           +++ b/kernel/selinux/selinux.c
-          @@ -241,3 +241,99 @@ void escape_to_root_for_adb_root(void)
+          @@ -241,3 +241,112 @@ void escape_to_root_for_adb_root(void)
            	}
            	commit_creds(cred);
            }
@@ -4830,8 +4842,21 @@ jobs:
           +    return out_sid;
           +}
           +
+          +/* 4.9: current_sid() is static inline in security/selinux/hooks.c and
+          + * NOT visible to the driver. Use selinux_cred(current_cred())->sid,
+          + * the same pattern backslashxx selinux.c already uses. */
+          +static inline u32 susfs_current_sid(void)
+          +{
+          +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+          +    const struct task_security_struct *tsec = selinux_cred(current_cred());
+          +#else
+          +    const struct cred_security_struct *tsec = selinux_cred(current_cred());
+          +#endif
+          +    return tsec ? tsec->sid : 0;
+          +}
+          +
           +u32 susfs_get_current_sid(void) {
-          +    return current_sid();
+          +    return susfs_current_sid();
           +}
           +
           +void susfs_set_zygote_sid(void)
@@ -4840,7 +4865,7 @@ jobs:
           +}
           +
           +bool susfs_is_current_zygote_domain(void) {
-          +    return unlikely(current_sid() == susfs_zygote_sid);
+          +    return unlikely(susfs_current_sid() == susfs_zygote_sid);
           +}
           +
           +void susfs_set_ksu_sid(void)
@@ -4849,7 +4874,7 @@ jobs:
           +}
           +
           +bool susfs_is_current_ksu_domain(void) {
-          +    return unlikely(current_sid() == susfs_ksu_sid);
+          +    return unlikely(susfs_current_sid() == susfs_ksu_sid);
           +}
           +
           +void susfs_set_init_sid(void)
@@ -4858,7 +4883,7 @@ jobs:
           +}
           +
           +bool susfs_is_current_init_domain(void) {
-          +    return unlikely(current_sid() == susfs_init_sid);
+          +    return unlikely(susfs_current_sid() == susfs_init_sid);
           +}
           +
           +void susfs_set_priv_app_sid(void)
