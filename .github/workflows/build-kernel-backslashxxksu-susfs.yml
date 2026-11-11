@@ -1,3 +1,21 @@
+# kernel-v5-backslashxx-susfs230-noadbroot (2026-11-11): v3 verbatim PLUS
+# adb_root compiled OUT. Backslashxx bakes adb root in by default
+# (drivers/kernelsu/Kconfig: KSU_FEATURE_ADBROOT, default y) and the
+# detector flags it as "adb_root". This build writes
+# "# CONFIG_KSU_FEATURE_ADBROOT is not set" into the defconfig (step
+# "Apply SUSFS 2.3.0 patch (tree) + defconfig") and fails the build if
+# the generated .config does not carry it (step "Build kernel").
+# Why a defconfig line is enough here: this is an IN-TREE build. The
+# driver's ksu.c only force-defines CONFIG_KSU_FEATURE_ADBROOT under
+# "#ifdef MODULE" (out-of-tree LKM builds), which does not apply here.
+# adb_root.c is entirely wrapped in #ifdef CONFIG_KSU_FEATURE_ADBROOT
+# and ksu_adb_root_init() is called only under the same guard, so with
+# =n the feature is compiled out, not hidden. Evidence the flag follows
+# the feature: the 3.2.0 driver has no adb_root code at all and the
+# phone shows no adb_root flag on it. No other change: same v3 base,
+# same enforcing cmdline, same SUSFS 2.3.0, standard KernelSU manager
+# only. Note: `adb shell` will no longer be granted root by the kernel;
+# root through the manager's su is unaffected.
 # kernel-v3-backslashxx-susfs230-enforcing (2026-11-09): v2 BOOTED but the
 # phone is PERMISSIVE (user getenforce = Permissive). Root cause: v2 is based
 # on v25, which predates the enforcing cmdline patch (added in v27), so the
@@ -59,7 +77,7 @@
 # helper. Manager: standard KernelSU manager (me.weishu.kernelsu) only;
 # BakaSU manager will NOT work with backslashxx.
 #
-name: Build RMX1805 Kernel (backslashxx + SUSFS 2.3.0)
+name: Build RMX1805 Kernel (backslashxx + SUSFS 2.3.0, no adb_root)
 
 on:
   workflow_dispatch:
@@ -4231,6 +4249,11 @@ jobs:
           grep -q "^CONFIG_KSU_SUSFS=y$" "$DEFCONFIG" || { echo "ERROR: CONFIG_KSU_SUSFS=y missing from defconfig" >&2; exit 1; }
           grep -q "^CONFIG_KSU_SUSFS_SUS_KSTAT=y$" "$DEFCONFIG" || { echo "ERROR: CONFIG_KSU_SUSFS_SUS_KSTAT=y missing from defconfig" >&2; exit 1; }
           grep -q "^CONFIG_KSU_SUSFS_TRY_UMOUNT=y$" "$DEFCONFIG" || { echo "ERROR: CONFIG_KSU_SUSFS_TRY_UMOUNT=y missing from defconfig" >&2; exit 1; }
+          # --- v5: adb_root OFF (see header). First drop any stale line, so
+          # the appended "is not set" line is the only copy in the file.
+          sed -i "/^CONFIG_KSU_FEATURE_ADBROOT=/d; /^# CONFIG_KSU_FEATURE_ADBROOT is not set/d" "$DEFCONFIG"
+          printf '%s\n' '# CONFIG_KSU_FEATURE_ADBROOT is not set' >> "$DEFCONFIG"
+          grep -q "^# CONFIG_KSU_FEATURE_ADBROOT is not set$" "$DEFCONFIG" || { echo "ERROR: CONFIG_KSU_FEATURE_ADBROOT is not disabled in defconfig" >&2; exit 1; }
           echo "=== defconfig KSU/SUSFS lines ==="
           grep "CONFIG_KSU" "$DEFCONFIG"
 
@@ -5118,6 +5141,12 @@ jobs:
           # no third-party cache action, and no stale-cache doubt.
           export CROSS_COMPILE=$GCC_DIR/aarch64-linux-
           make RMX1805_ArcticFox-KSU_defconfig
+          # v5 fail-fast: adb_root must be compiled OUT. The defconfig
+          # carries "# CONFIG_KSU_FEATURE_ADBROOT is not set"; if the
+          # generated .config does not, fail here loudly instead of
+          # shipping a kernel that silently still has adb_root.
+          grep -q "^# CONFIG_KSU_FEATURE_ADBROOT is not set$" .config || { echo "ERROR: CONFIG_KSU_FEATURE_ADBROOT is not disabled in .config after defconfig" >&2; exit 1; }
+          ! grep -q "^CONFIG_KSU_FEATURE_ADBROOT=y$" .config || { echo "ERROR: CONFIG_KSU_FEATURE_ADBROOT=y in .config after defconfig" >&2; exit 1; }
           # v20 fail-fast #2: prove the built .config carries pstore BEFORE
           # the parallel build, so a config regression fails here loudly
           # instead of uploading a kernel that silently has no pstore.
