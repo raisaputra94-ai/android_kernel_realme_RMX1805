@@ -1,3 +1,22 @@
+# kernel-v6-backslashxx-susfs230-noadbroot-pinned (2026-11-20): v5 verbatim
+# PLUS the driver fetch is pinned. The 2026-11-20 v5 run FAILED at step 8
+# (SUSFS driver patch: kernel/Kconfig:69 and kernel/ksu.c:180 do not
+# apply). Root cause: the fetch step ran setup.sh with "v3.3.1-38", which
+# is a git-describe string, NOT a ref -- setup.sh logged "pathspec
+# 'v3.3.1-38' did not match any file(s) known to git" and silently fell
+# back to the default branch, i.e. newest master. On 2026-11-09 master
+# was still close enough to feeec8e that the patch applied, so v3 built
+# green; by 2026-11-20 master had drifted and the patch fails. The
+# "pinned v3.3.1-38" claim in the old step was never true -- the fetch
+# ALWAYS got newest. Fix: no setup.sh at all; plain git clone + checkout
+# of feeec8e4059e3bb0ecdd1827b687b69f1cf4a2fb, with a HEAD check that fails
+# the build if the pin drifts. The SUSFS driver patch was verified to
+# apply cleanly to feeec8e (git apply --check, 2026-11-20). setup.sh's
+# Makefile/Kconfig edits are not needed: the ArcticFox tree already
+# ships obj-$(CONFIG_KSU) += kernelsu/ and the Kconfig source line
+# (verified in the tree), and the new step greps for both. No other
+# change: same v5 no-adb_root defconfig, same enforcing cmdline, same
+# SUSFS 2.3.0.
 # kernel-v5-backslashxx-susfs230-noadbroot (2026-11-11): v3 verbatim PLUS
 # adb_root compiled OUT. Backslashxx bakes adb root in by default
 # (drivers/kernelsu/Kconfig: KSU_FEATURE_ADBROOT, default y) and the
@@ -77,7 +96,7 @@
 # helper. Manager: standard KernelSU manager (me.weishu.kernelsu) only;
 # BakaSU manager will NOT work with backslashxx.
 #
-name: Build RMX1805 Kernel (backslashxx + SUSFS 2.3.0, no adb_root)
+name: Build RMX1805 Kernel (backslashxx + SUSFS 2.3.0, no adb_root, pinned driver)
 
 on:
   workflow_dispatch:
@@ -4438,12 +4457,28 @@ jobs:
           if [ -z "$PSTORE_CHOICE" ]; then PSTORE_CHOICE="enabled"; fi
           bash /tmp/pstore-fix-v20.sh "$PSTORE_CHOICE"
 
-      - name: Fetch backslashxx KernelSU driver (official setup.sh, pinned v3.3.1-38)
+      - name: Fetch backslashxx KernelSU driver (pinned commit feeec8e)
         run: |
-          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s v3.3.1-38
+          # setup.sh is GONE: "v3.3.1-38" is a git-describe string, not a
+          # ref, so setup.sh failed to check it out ("pathspec 'v3.3.1-38'
+          # did not match") and silently fell back to the default branch
+          # -- i.e. newest master. The SUSFS driver patch is ported to
+          # feeec8e, so it fails on newer master (2026-11-20 run: patch
+          # failed at kernel/Kconfig:69 and kernel/ksu.c:180). Pin the
+          # exact commit instead; the HEAD check below fails the build
+          # if the pin ever drifts.
+          git clone https://github.com/backslashxx/KernelSU.git
+          cd KernelSU
+          git checkout feeec8e4059e3bb0ecdd1827b687b69f1cf4a2fb
+          test "$(git rev-parse HEAD)" = "feeec8e4059e3bb0ecdd1827b687b69f1cf4a2fb" || { echo "ERROR: driver HEAD is not feeec8e" >&2; exit 1; }
+          cd ..
+          ln -s ../KernelSU/kernel drivers/kernelsu
           ls -la drivers/kernelsu
-          test -L drivers/kernelsu || { echo "ERROR: drivers/kernelsu symlink missing after setup.sh" >&2; exit 1; }
+          test -L drivers/kernelsu || { echo "ERROR: drivers/kernelsu symlink missing" >&2; exit 1; }
           test -f drivers/kernelsu/feature/sucompat.c || { echo "ERROR: driver source not linked" >&2; exit 1; }
+          echo "=== kernel tree must already wire in the driver (setup.sh used to do this, the tree ships it) ==="
+          grep -q "obj-.*CONFIG_KSU.*kernelsu" drivers/Makefile || { echo "ERROR: drivers/Makefile lacks the kernelsu obj line" >&2; exit 1; }
+          grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || { echo "ERROR: drivers/Kconfig does not source the kernelsu Kconfig" >&2; exit 1; }
           echo "=== hook functions the kernel source calls (must all be present) ==="
           grep -q "ksu_handle_execveat" drivers/kernelsu/feature/sucompat.c || { echo "ERROR: ksu_handle_execveat missing from driver" >&2; exit 1; }
           grep -q "ksu_handle_faccessat" drivers/kernelsu/feature/sucompat.c || { echo "ERROR: ksu_handle_faccessat missing from driver" >&2; exit 1; }
@@ -4451,7 +4486,7 @@ jobs:
           grep -q "ksu_handle_sys_reboot" drivers/kernelsu/supercall/supercall.c || { echo "ERROR: ksu_handle_sys_reboot missing from driver" >&2; exit 1; }
           echo "=== driver must NOT have a CONFIG_KSU_MANUAL_HOOK option (guard is CONFIG_KSU) ==="
           if grep -q "KSU_MANUAL_HOOK" drivers/kernelsu/Kconfig; then echo "ERROR: driver has KSU_MANUAL_HOOK - the hooks patch guard is wrong" >&2; exit 1; fi
-          echo "backslashxx KernelSU v3.3.1-38 fetched and verified"
+          echo "backslashxx KernelSU pinned at feeec8e fetched and verified"
 
       - name: Apply SUSFS driver patch (sidex15, ported to backslashxx v3.3.1)
         run: |
